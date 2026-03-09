@@ -41,3 +41,7 @@ npm-debug.log*
 
 # Test
 coverage/
+
+# Bot data & logs
+data/
+logs/

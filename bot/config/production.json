@@ -1,0 +1,12 @@
+{
+  "general": {
+    "dryRun": false,
+    "logLevel": "info"
+  },
+  "binance": {
+    "testnet": false
+  },
+  "solana": {
+    "network": "mainnet-beta"
+  }
+}
