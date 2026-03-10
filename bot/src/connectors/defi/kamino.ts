@@ -80,26 +80,38 @@ export class KaminoLending implements LendingProtocol {
 
   async getApy(): Promise<number> {
     return withRetry(async () => {
-      const res = await fetch(`${KAMINO_API}/v2/metrics/market?token=${USDC_MINT}`);
+      const res = await fetch(`${KAMINO_API}/kamino-market/${KAMINO_MAIN_MARKET}/reserves/metrics`);
       if (!res.ok) {
         throw new Error(`Kamino APY fetch failed: ${res.status}`);
       }
       const data = await res.json() as any;
-      return data?.supplyApy ?? 0;
+      // Find USDC reserve metrics
+      const reserves = Array.isArray(data) ? data : [];
+      const usdcReserve = reserves.find((r: any) => r.mint === USDC_MINT || r.symbol === 'USDC');
+      return usdcReserve?.supplyApy ?? usdcReserve?.supplyInterestApy ?? 0;
     }, 'kamino-apy');
   }
 
   async getBalance(): Promise<number> {
     return withRetry(async () => {
       const res = await fetch(
-        `${KAMINO_API}/v2/positions?wallet=${this.walletAddress}&token=${USDC_MINT}`,
+        `${KAMINO_API}/kamino-market/${KAMINO_MAIN_MARKET}/users/${this.walletAddress}/obligations`,
       );
       if (!res.ok) {
         log.warn({ status: res.status }, 'Kamino balance fetch failed, returning 0');
         return 0;
       }
       const data = await res.json() as any;
-      return data?.supplyBalance ?? 0;
+      // Find USDC supply balance across obligations
+      const obligations = Array.isArray(data) ? data : [];
+      for (const obligation of obligations) {
+        const deposits = obligation?.deposits ?? obligation?.supplyPositions ?? [];
+        const usdcDeposit = deposits.find((d: any) => d.mint === USDC_MINT || d.symbol === 'USDC');
+        if (usdcDeposit?.amount ?? usdcDeposit?.balance) {
+          return usdcDeposit.amount ?? usdcDeposit.balance;
+        }
+      }
+      return 0;
     }, 'kamino-balance');
   }
 

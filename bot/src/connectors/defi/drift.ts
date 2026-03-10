@@ -13,7 +13,7 @@ import BN from 'bn.js';
 
 const log = createChildLogger('drift');
 
-const DRIFT_API = 'https://mainnet-beta.api.drift.trade';
+const DRIFT_API = 'https://data.api.drift.trade';
 
 export class DriftLending implements LendingProtocol {
   readonly name = 'drift';
@@ -73,26 +73,38 @@ export class DriftLending implements LendingProtocol {
 
   async getApy(): Promise<number> {
     return withRetry(async () => {
-      const res = await fetch(`${DRIFT_API}/stats/spotMarkets`);
+      const res = await fetch(`${DRIFT_API}/stats/USDC/rateHistory/deposit?period=1d`);
       if (!res.ok) {
         throw new Error(`Drift APY fetch failed: ${res.status}`);
       }
       const data = await res.json() as any;
-      const usdcMarket = Array.isArray(data) ? data.find((m: any) => m.symbol === 'USDC') : null;
-      return usdcMarket?.depositApy ?? 0;
+      // Use the most recent rate entry
+      if (Array.isArray(data) && data.length > 0) {
+        const latest = data[data.length - 1];
+        return latest?.rate ?? latest?.apy ?? 0;
+      }
+      return 0;
     }, 'drift-apy');
   }
 
   async getBalance(): Promise<number> {
     return withRetry(async () => {
-      const res = await fetch(`${DRIFT_API}/user?userPublicKey=${this.walletAddress}`);
+      const res = await fetch(`${DRIFT_API}/authority/${this.walletAddress}/accounts`);
       if (!res.ok) {
         log.warn({ status: res.status }, 'Drift balance fetch failed, returning 0');
         return 0;
       }
       const data = await res.json() as any;
-      const usdcPosition = data?.spotPositions?.find((p: any) => p.marketIndex === 0);
-      return usdcPosition?.scaledBalance ?? 0;
+      // Find USDC spot position across all sub-accounts
+      const accounts = Array.isArray(data) ? data : [data];
+      for (const account of accounts) {
+        const positions = account?.spotPositions ?? [];
+        const usdcPosition = positions.find((p: any) => p.marketIndex === 0);
+        if (usdcPosition?.scaledBalance) {
+          return usdcPosition.scaledBalance;
+        }
+      }
+      return 0;
     }, 'drift-balance');
   }
 
