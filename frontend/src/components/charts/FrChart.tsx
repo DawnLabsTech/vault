@@ -176,40 +176,37 @@ export function FrChart() {
             Funding Rate (Annualized %) — 1M
           </h3>
           {/* Exchange toggles */}
-          <div className="flex gap-1">
+          <div className="flex rounded overflow-hidden border border-vault-border">
             <button
               onClick={toggleBinance}
-              className={`flex flex-col items-center px-2 py-0.5 rounded border text-[10px] font-medium transition-colors ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-medium transition-colors ${
                 showBinance
-                  ? 'border-[#00ff88]/40 bg-[#00ff88]/10'
-                  : 'border-vault-border bg-transparent opacity-40'
+                  ? 'bg-[#00ff88]/10 text-[#00ff88]'
+                  : 'text-vault-muted/40 hover:text-vault-muted/70'
               }`}
             >
-              <span className="flex items-center gap-1">
-                <span className={`inline-block w-2 h-0.5 rounded-full`} style={{ background: BINANCE_COLOR }} />
-                <span style={{ color: showBinance ? BINANCE_COLOR : '#888' }}>Binance</span>
-              </span>
-              {activeExchange === 'binance' && (
-                <span className="text-[7px] text-[#00ff88]/70 font-bold leading-none mt-0.5">ACTIVE</span>
-              )}
+              <span className="inline-block w-2.5 h-[2px] rounded-full" style={{ background: showBinance ? BINANCE_COLOR : '#555' }} />
+              Binance
             </button>
             <button
               onClick={toggleDrift}
-              className={`flex flex-col items-center px-2 py-0.5 rounded border text-[10px] font-medium transition-colors ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-medium transition-colors border-l border-vault-border ${
                 showDrift
-                  ? 'border-[#C4B5FD]/40 bg-[#C4B5FD]/10'
-                  : 'border-vault-border bg-transparent opacity-40'
+                  ? 'bg-[#C4B5FD]/10 text-[#C4B5FD]'
+                  : 'text-vault-muted/40 hover:text-vault-muted/70'
               }`}
             >
-              <span className="flex items-center gap-1">
-                <span className={`inline-block w-2 h-0.5 rounded-full`} style={{ background: DRIFT_COLOR }} />
-                <span style={{ color: showDrift ? DRIFT_COLOR : '#888' }}>Drift</span>
-              </span>
-              {activeExchange === 'drift' && (
-                <span className="text-[7px] text-[#C4B5FD]/70 font-bold leading-none mt-0.5">ACTIVE</span>
-              )}
+              <span className="inline-block w-2.5 h-[2px] rounded-full" style={{ background: showDrift ? DRIFT_COLOR : '#555' }} />
+              Drift
             </button>
           </div>
+          {/* Active exchange indicator */}
+          <span className="text-[9px] text-vault-muted">
+            Trading on{' '}
+            <span style={{ color: activeExchange === 'drift' ? DRIFT_COLOR : BINANCE_COLOR }} className="font-bold">
+              {activeExchange === 'drift' ? 'Drift' : 'Binance'}
+            </span>
+          </span>
         </div>
         <div className="flex gap-3 text-[10px]">
           <span className="text-vault-warning">-- Entry ({FR_ENTRY_THRESHOLD}%)</span>
