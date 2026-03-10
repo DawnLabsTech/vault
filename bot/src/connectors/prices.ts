@@ -39,9 +39,15 @@ let lastKnownPrices: PriceData | null = null;
 async function fetchPricesFromJupiter(): Promise<PriceData> {
   const url = `${JUPITER_PRICE_API}?ids=${SOL_MINT},${DAWNSOL_MINT}`;
 
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  const apiKey = process.env.JUPITER_API_KEY;
+  if (apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+
   const response = await fetch(url, {
     method: 'GET',
-    headers: { Accept: 'application/json' },
+    headers,
     signal: AbortSignal.timeout(10_000),
   });
 

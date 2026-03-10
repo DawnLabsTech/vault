@@ -51,6 +51,11 @@ const ENV_VARS: EnvVar[] = [
     required: false,
     sensitive: true,
   },
+  {
+    name: 'JUPITER_API_KEY',
+    required: false,
+    sensitive: true,
+  },
 ];
 
 /**
