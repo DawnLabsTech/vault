@@ -78,10 +78,10 @@ export class DriftLending implements LendingProtocol {
         throw new Error(`Drift APY fetch failed: ${res.status}`);
       }
       const data = await res.json() as any;
-      // Use the most recent rate entry
-      if (Array.isArray(data) && data.length > 0) {
-        const latest = data[data.length - 1];
-        return latest?.rate ?? latest?.apy ?? 0;
+      const rates = data?.rates;
+      if (Array.isArray(rates) && rates.length > 0) {
+        const latest = rates[rates.length - 1];
+        return parseFloat(latest[1]) || 0;
       }
       return 0;
     }, 'drift-apy');

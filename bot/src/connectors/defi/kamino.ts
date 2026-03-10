@@ -85,10 +85,9 @@ export class KaminoLending implements LendingProtocol {
         throw new Error(`Kamino APY fetch failed: ${res.status}`);
       }
       const data = await res.json() as any;
-      // Find USDC reserve metrics
       const reserves = Array.isArray(data) ? data : [];
-      const usdcReserve = reserves.find((r: any) => r.mint === USDC_MINT || r.symbol === 'USDC');
-      return usdcReserve?.supplyApy ?? usdcReserve?.supplyInterestApy ?? 0;
+      const usdcReserve = reserves.find((r: any) => r.liquidityTokenMint === USDC_MINT || r.liquidityToken === 'USDC');
+      return usdcReserve?.supplyApy ? parseFloat(usdcReserve.supplyApy) : 0;
     }, 'kamino-apy');
   }
 
