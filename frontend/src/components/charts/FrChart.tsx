@@ -170,19 +170,19 @@ export function FrChart() {
 
   return (
     <div className="bg-vault-card border border-vault-border rounded-lg p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-3">
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex flex-col gap-1.5">
           <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
             Funding Rate (Annualized %) — 1M
           </h3>
-          {/* Exchange toggles */}
-          <div className="flex rounded overflow-hidden border border-vault-border">
+          <div className="flex items-center gap-2">
+            {/* Exchange toggles */}
             <button
               onClick={toggleBinance}
-              className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-medium transition-colors ${
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] font-medium transition-colors ${
                 showBinance
-                  ? 'bg-[#00ff88]/10 text-[#00ff88]'
-                  : 'text-vault-muted/40 hover:text-vault-muted/70'
+                  ? 'border-[#00ff88]/30 bg-[#00ff88]/10 text-[#00ff88]'
+                  : 'border-vault-border text-vault-muted/40 hover:text-vault-muted/70'
               }`}
             >
               <span className="inline-block w-2.5 h-[2px] rounded-full" style={{ background: showBinance ? BINANCE_COLOR : '#555' }} />
@@ -190,25 +190,26 @@ export function FrChart() {
             </button>
             <button
               onClick={toggleDrift}
-              className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-medium transition-colors border-l border-vault-border ${
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] font-medium transition-colors ${
                 showDrift
-                  ? 'bg-[#C4B5FD]/10 text-[#C4B5FD]'
-                  : 'text-vault-muted/40 hover:text-vault-muted/70'
+                  ? 'border-[#C4B5FD]/30 bg-[#C4B5FD]/10 text-[#C4B5FD]'
+                  : 'border-vault-border text-vault-muted/40 hover:text-vault-muted/70'
               }`}
             >
               <span className="inline-block w-2.5 h-[2px] rounded-full" style={{ background: showDrift ? DRIFT_COLOR : '#555' }} />
               Drift
             </button>
-          </div>
-          {/* Active exchange indicator */}
-          <span className="text-[9px] text-vault-muted">
-            Trading on{' '}
-            <span style={{ color: activeExchange === 'drift' ? DRIFT_COLOR : BINANCE_COLOR }} className="font-bold">
-              {activeExchange === 'drift' ? 'Drift' : 'Binance'}
+            <span className="text-vault-border">|</span>
+            {/* Active exchange indicator */}
+            <span className="text-[9px] text-vault-muted">
+              Trading on{' '}
+              <span style={{ color: activeExchange === 'drift' ? DRIFT_COLOR : BINANCE_COLOR }} className="font-bold">
+                {activeExchange === 'drift' ? 'Drift' : 'Binance'}
+              </span>
             </span>
-          </span>
+          </div>
         </div>
-        <div className="flex gap-3 text-[10px]">
+        <div className="flex flex-col items-end gap-0.5 text-[10px] shrink-0">
           <span className="text-vault-warning">-- Entry ({FR_ENTRY_THRESHOLD}%)</span>
           <span className="text-vault-muted">-- Exit ({FR_EXIT_THRESHOLD}%)</span>
           <span className="text-vault-negative">-- Emergency ({FR_EMERGENCY_THRESHOLD}%)</span>
