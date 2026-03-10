@@ -10,10 +10,10 @@
   "binance": {
     "symbol": "SOLUSDT",
     "leverage": 1,
-    "testnet": true
+    "testnet": false
   },
   "solana": {
-    "network": "devnet"
+    "network": "mainnet-beta"
   },
   "thresholds": {
     "frEntryAnnualized": 10,
