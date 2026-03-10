@@ -1,34 +1,37 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useFrHistory, useActivePerpExchange } from '@/hooks/useFr';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { FR_ENTRY_THRESHOLD, FR_EXIT_THRESHOLD, FR_EMERGENCY_THRESHOLD } from '@/lib/constants';
 import { createChart, LineSeries, type IChartApi, type ISeriesApi, ColorType } from 'lightweight-charts';
 
-type Exchange = 'binance' | 'drift';
+// Binance: 8h intervals (3/day), Drift: 1h intervals (24/day)
+const BINANCE_PERIODS_PER_DAY = 3;
+const DRIFT_PERIODS_PER_DAY = 24;
 
-const EXCHANGE_CONFIG: Record<Exchange, { label: string; periodsPerDay: number }> = {
-  binance: { label: 'Binance SOLUSDC', periodsPerDay: 3 },
-  drift: { label: 'Drift SOL-PERP', periodsPerDay: 24 },
-};
+function toAnnualized(fr: number, periodsPerDay: number): number {
+  return fr * 100 * periodsPerDay * 365;
+}
 
 export function FrChart() {
-  const [exchange, setExchange] = useState<Exchange>('binance');
   const { data: configData } = useActivePerpExchange();
-  const activeExchange = (configData?.perpExchange ?? 'binance') as Exchange;
-  const { label, periodsPerDay } = EXCHANGE_CONFIG[exchange];
-  const { data, isLoading } = useFrHistory(3, exchange);
+  const activeExchange = (configData?.perpExchange ?? 'binance') as 'binance' | 'drift';
+
+  const { data: binanceData, isLoading: binanceLoading } = useFrHistory(3, 'binance');
+  const { data: driftData, isLoading: driftLoading } = useFrHistory(3, 'drift');
+
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<{
-    fr: ISeriesApi<'Line'>;
+    binanceFr: ISeriesApi<'Line'>;
+    driftFr: ISeriesApi<'Line'>;
     entry: ISeriesApi<'Line'>;
     exit: ISeriesApi<'Line'>;
     emergency: ISeriesApi<'Line'>;
   } | null>(null);
 
-  // Initialize chart + series once when container is available
+  // Initialize chart once
   useEffect(() => {
     if (!containerRef.current || chartRef.current) return;
 
@@ -49,8 +52,13 @@ export function FrChart() {
     });
     chartRef.current = chart;
 
-    const fr = chart.addSeries(LineSeries, {
+    const binanceFr = chart.addSeries(LineSeries, {
       color: '#00ff88',
+      lineWidth: 1,
+      priceLineVisible: false,
+    });
+    const driftFr = chart.addSeries(LineSeries, {
+      color: '#7B68EE',
       lineWidth: 1,
       priceLineVisible: false,
     });
@@ -72,7 +80,7 @@ export function FrChart() {
       lineStyle: 2,
       priceLineVisible: false,
     });
-    seriesRef.current = { fr, entry, exit, emergency };
+    seriesRef.current = { binanceFr, driftFr, entry, exit, emergency };
 
     const observer = new ResizeObserver(() => {
       if (containerRef.current) {
@@ -89,64 +97,88 @@ export function FrChart() {
     };
   });
 
-  // Update data when it changes
+  // Update data when either dataset changes
   useEffect(() => {
-    if (!seriesRef.current || !data?.length) return;
+    if (!seriesRef.current) return;
 
-    const sorted = [...data].sort((a, b) => a.fundingTime - b.fundingTime);
-    const frData = sorted.map((d) => ({
-      time: Math.floor(d.fundingTime / 1000) as any,
-      value: d.fundingRate * 100 * periodsPerDay * 365, // annualized %
-    }));
+    // Binance series
+    if (binanceData?.length) {
+      const sorted = [...binanceData].sort((a, b) => a.fundingTime - b.fundingTime);
+      seriesRef.current.binanceFr.setData(
+        sorted.map((d) => ({
+          time: Math.floor(d.fundingTime / 1000) as any,
+          value: toAnnualized(d.fundingRate, BINANCE_PERIODS_PER_DAY),
+        }))
+      );
+    }
 
-    seriesRef.current.fr.setData(frData);
-    seriesRef.current.entry.setData(
-      frData.map((d) => ({ time: d.time, value: FR_ENTRY_THRESHOLD }))
-    );
-    seriesRef.current.exit.setData(
-      frData.map((d) => ({ time: d.time, value: FR_EXIT_THRESHOLD }))
-    );
-    seriesRef.current.emergency.setData(
-      frData.map((d) => ({ time: d.time, value: FR_EMERGENCY_THRESHOLD }))
-    );
+    // Drift series
+    if (driftData?.length) {
+      const sorted = [...driftData].sort((a, b) => a.fundingTime - b.fundingTime);
+      seriesRef.current.driftFr.setData(
+        sorted.map((d) => ({
+          time: Math.floor(d.fundingTime / 1000) as any,
+          value: toAnnualized(d.fundingRate, DRIFT_PERIODS_PER_DAY),
+        }))
+      );
+    }
+
+    // Threshold lines — use whichever data range is available
+    const allTimes: number[] = [];
+    if (binanceData?.length) {
+      allTimes.push(
+        ...binanceData.map((d) => Math.floor(d.fundingTime / 1000))
+      );
+    }
+    if (driftData?.length) {
+      allTimes.push(
+        ...driftData.map((d) => Math.floor(d.fundingTime / 1000))
+      );
+    }
+    if (allTimes.length > 0) {
+      const minTime = Math.min(...allTimes);
+      const maxTime = Math.max(...allTimes);
+      const thresholdPoints = [
+        { time: minTime as any, value: 0 },
+        { time: maxTime as any, value: 0 },
+      ];
+      seriesRef.current.entry.setData(
+        thresholdPoints.map((p) => ({ ...p, value: FR_ENTRY_THRESHOLD }))
+      );
+      seriesRef.current.exit.setData(
+        thresholdPoints.map((p) => ({ ...p, value: FR_EXIT_THRESHOLD }))
+      );
+      seriesRef.current.emergency.setData(
+        thresholdPoints.map((p) => ({ ...p, value: FR_EMERGENCY_THRESHOLD }))
+      );
+    }
 
     chartRef.current?.timeScale().fitContent();
-  }, [data, periodsPerDay]);
+  }, [binanceData, driftData]);
+
+  const isLoading = binanceLoading && driftLoading;
 
   return (
     <div className="bg-vault-card border border-vault-border rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-3">
-          <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
-            Funding Rate (Annualized %) — 3M
-          </h3>
-          <div className="flex bg-vault-bg rounded overflow-hidden border border-vault-border">
-            {(['binance', 'drift'] as const).map((ex) => (
-              <button
-                key={ex}
-                onClick={() => setExchange(ex)}
-                className={`px-2 py-0.5 text-[10px] font-medium transition-colors flex items-center gap-1 ${
-                  exchange === ex
-                    ? 'bg-vault-accent text-vault-bg'
-                    : 'text-vault-muted hover:text-vault-text'
-                }`}
-              >
-                {ex === 'binance' ? 'Binance' : 'Drift'}
-                {activeExchange === ex && (
-                  <span className={`text-[8px] px-1 rounded-sm font-bold ${
-                    exchange === ex
-                      ? 'bg-vault-bg/30 text-vault-bg'
-                      : 'bg-vault-accent/20 text-vault-accent'
-                  }`}>
-                    ACTIVE
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-          <span className="text-vault-muted text-[10px]">{label}</span>
-        </div>
+        <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
+          Funding Rate (Annualized %) — 3M
+        </h3>
         <div className="flex gap-3 text-[10px]">
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-2.5 h-0.5 bg-[#00ff88] rounded-full" />
+            <span className="text-[#00ff88]">Binance</span>
+            {activeExchange === 'binance' && (
+              <span className="text-[8px] px-1 bg-[#00ff88]/20 text-[#00ff88] rounded-sm font-bold">ACTIVE</span>
+            )}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-2.5 h-0.5 bg-[#7B68EE] rounded-full" />
+            <span className="text-[#7B68EE]">Drift</span>
+            {activeExchange === 'drift' && (
+              <span className="text-[8px] px-1 bg-[#7B68EE]/20 text-[#7B68EE] rounded-sm font-bold">ACTIVE</span>
+            )}
+          </span>
           <span className="text-vault-warning">-- Entry ({FR_ENTRY_THRESHOLD}%)</span>
           <span className="text-vault-muted">-- Exit ({FR_EXIT_THRESHOLD}%)</span>
           <span className="text-vault-negative">-- Emergency ({FR_EMERGENCY_THRESHOLD}%)</span>

@@ -40,11 +40,18 @@ async function fetchDriftFrHistory(months: number): Promise<FundingRateData[]> {
       const ts = parseInt(d.ts) * 1000;
       return ts >= startTime;
     })
-    .map((d) => ({
-      symbol: 'SOL-PERP',
-      fundingRate: parseInt(d.fundingRate) / 1e9,
-      fundingTime: parseInt(d.ts) * 1000,
-    }));
+    .map((d) => {
+      // Drift fundingRate is absolute (USD per SOL per hour), not a percentage.
+      // Divide by oraclePriceTwap to get a percentage rate comparable to Binance.
+      const rawFr = parseInt(d.fundingRate);
+      const oracle = parseInt(d.oraclePriceTwap);
+      const frPct = oracle > 0 ? (rawFr / 1e9) / (oracle / 1e6) : 0;
+      return {
+        symbol: 'SOL-PERP',
+        fundingRate: frPct,
+        fundingTime: parseInt(d.ts) * 1000,
+      };
+    });
 }
 
 export function useFrHistory(months = 3, exchange: string = 'binance') {
@@ -65,4 +72,3 @@ export function useActivePerpExchange() {
     { refreshInterval: 0, revalidateOnFocus: false, fallbackData: { perpExchange: 'binance' } }
   );
 }
-

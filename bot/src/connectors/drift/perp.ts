@@ -328,8 +328,13 @@ export class DriftPerp {
       const records: any[] = json.fundingRates ?? (Array.isArray(json) ? json : []);
       if (records.length > 0) {
         const latest = records[records.length - 1];
-        // Drift stores funding rate with 1e9 precision
-        return parseInt(latest.fundingRate) / 1e9;
+        // Drift fundingRate is absolute (USD/SOL/hour); divide by oracle price for %
+        const rawFr = parseInt(latest.fundingRate);
+        const oracle = parseInt(latest.oraclePriceTwap);
+        if (oracle > 0) {
+          return (rawFr / 1e9) / (oracle / 1e6);
+        }
+        return 0;
       }
       return 0;
     }, 'drift-getFundingRate').catch((err) => {

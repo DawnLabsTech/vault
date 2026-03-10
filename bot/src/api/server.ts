@@ -229,11 +229,17 @@ export class ApiServer {
             const ts = parseInt(d.ts) * 1000;
             return ts >= startTime;
           })
-          .map((d: any) => ({
-            symbol: 'SOL-PERP',
-            fundingRate: parseInt(d.fundingRate) / 1e9,
-            fundingTime: parseInt(d.ts) * 1000,
-          }));
+          .map((d: any) => {
+            // Drift fundingRate is absolute (USD/SOL/hour); divide by oracle price for %
+            const rawFr = parseInt(d.fundingRate);
+            const oracle = parseInt(d.oraclePriceTwap);
+            const frPct = oracle > 0 ? (rawFr / 1e9) / (oracle / 1e6) : 0;
+            return {
+              symbol: 'SOL-PERP',
+              fundingRate: frPct,
+              fundingTime: parseInt(d.ts) * 1000,
+            };
+          });
       } catch (err) {
         log.warn({ error: (err as Error).message }, 'Failed to fetch Drift FR history');
         return [];
