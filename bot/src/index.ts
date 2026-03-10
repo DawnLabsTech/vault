@@ -13,6 +13,7 @@ import { Orchestrator } from './core/orchestrator.js';
 import { sendAlert } from './utils/notify.js';
 import { ApiServer } from './api/server.js';
 import { loadWalletFromEnv } from './connectors/solana/wallet.js';
+import { SolanaRpc } from './connectors/solana/rpc.js';
 import { KaminoLending } from './connectors/defi/kamino.js';
 import { DriftLending } from './connectors/defi/drift.js';
 import { JupiterLending } from './connectors/defi/jupiter-lend.js';
@@ -123,6 +124,9 @@ async function main(): Promise<void> {
   const dnExecutor = new DnExecutor(config, dnConnectors, walletAddress);
   const riskManager = new RiskManager(config);
 
+  // Initialize Solana RPC
+  const solanaRpc = new SolanaRpc(rpcUrl);
+
   // Create orchestrator
   const orchestrator = new Orchestrator({
     binanceRest,
@@ -131,6 +135,8 @@ async function main(): Promise<void> {
     baseAllocator,
     dnExecutor,
     riskManager,
+    solanaRpc,
+    walletAddress,
   });
 
   // Graceful shutdown handler

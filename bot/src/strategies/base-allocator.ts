@@ -148,7 +148,7 @@ export class BaseAllocator {
    * Execute rebalance: withdraw from over-allocated protocols, then deposit
    * into the target protocol. Returns transaction signatures and ledger events.
    */
-  async rebalance(): Promise<{ txSigs: string[]; events: LedgerEvent[] }> {
+  async rebalance(walletUsdcBalance = 0): Promise<{ txSigs: string[]; events: LedgerEvent[] }> {
     const txSigs: string[] = [];
     const events: LedgerEvent[] = [];
 
@@ -162,8 +162,11 @@ export class BaseAllocator {
       0,
     );
 
+    // Include wallet USDC so initial deployment and top-ups work
+    const totalUsdc = totalDeployed + walletUsdcBalance;
+
     const allocations = this.calculateOptimalAllocation(
-      totalDeployed,
+      totalUsdc,
       currentAllocations,
       apyRanking,
     );

@@ -13,11 +13,14 @@ import { calculateDailyPnl, saveDailyPnl } from '../measurement/pnl.js';
 import { getStateJson, setStateJson } from '../measurement/state-store.js';
 import { getPrices } from '../connectors/prices.js';
 import { sendAlert } from '../utils/notify.js';
+import { SolanaRpc } from '../connectors/solana/rpc.js';
 import { BotState, EventType, ActionType, type PortfolioSnapshot, type Action, type FundingRateData } from '../types.js';
 import type { BinanceRestClient } from '../connectors/binance/rest.js';
 import type { BinanceWsClient } from '../connectors/binance/ws.js';
 
 const log = createChildLogger('orchestrator');
+
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 export interface OrchestratorDeps {
   binanceRest: BinanceRestClient;
@@ -26,6 +29,8 @@ export interface OrchestratorDeps {
   baseAllocator: BaseAllocator;
   dnExecutor: DnExecutor;
   riskManager: RiskManager;
+  solanaRpc: SolanaRpc;
+  walletAddress: string;
 }
 
 interface PersistedState {
@@ -290,7 +295,19 @@ export class Orchestrator {
 
   private async rebalanceLending(): Promise<void> {
     try {
-      const result = await this.deps.baseAllocator.rebalance();
+      // Fetch wallet USDC balance so initial deployment works
+      let walletUsdc = 0;
+      try {
+        const rawBalance = await this.deps.solanaRpc.getTokenBalance(
+          this.deps.walletAddress,
+          USDC_MINT,
+        );
+        walletUsdc = rawBalance / 1e6; // Convert from base units (6 decimals)
+      } catch (err) {
+        log.warn({ error: (err as Error).message }, 'Failed to fetch wallet USDC balance');
+      }
+
+      const result = await this.deps.baseAllocator.rebalance(walletUsdc);
       if (result.events.length > 0) {
         for (const event of result.events) {
           recordEvent(event);
