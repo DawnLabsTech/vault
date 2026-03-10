@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useFr } from '@/hooks/useFr';
+import { useFrHistory } from '@/hooks/useFr';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { FR_ENTRY_THRESHOLD, FR_EXIT_THRESHOLD, FR_EMERGENCY_THRESHOLD } from '@/lib/constants';
 import { createChart, LineSeries, type IChartApi, ColorType } from 'lightweight-charts';
 
 export function FrChart() {
-  const { data, isLoading } = useFr();
+  const { data, isLoading } = useFrHistory(3);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
@@ -108,7 +108,7 @@ export function FrChart() {
     <div className="bg-vault-card border border-vault-border rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
-          Funding Rate (Annualized %)
+          Funding Rate (Annualized %) — 3M
         </h3>
         <div className="flex gap-3 text-[10px]">
           <span className="text-vault-warning">-- Entry ({FR_ENTRY_THRESHOLD}%)</span>
