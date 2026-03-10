@@ -42,6 +42,7 @@ export class JupiterSwap {
         priceImpactPct: Number(data.priceImpactPct),
         slippageBps,
         routePlan: JSON.stringify(data.routePlan),
+        rawQuoteResponse: data,
       };
     }, 'jupiter-quote');
   }
@@ -58,7 +59,7 @@ export class JupiterSwap {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        quoteResponse: quote,
+        quoteResponse: quote.rawQuoteResponse,
         userPublicKey: this.walletAddress,
         wrapAndUnwrapSol: true,
       }),

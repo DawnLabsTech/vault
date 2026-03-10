@@ -13,13 +13,13 @@ function getInsertStmt() {
       INSERT INTO snapshots (
         timestamp, total_nav_usdc, lending_balance, lending_breakdown,
         dawnsol_balance, dawnsol_usdc_value, binance_usdc_balance,
-        binance_perp_unrealized_pnl, binance_perp_size, state,
-        sol_price, dawnsol_price
+        buffer_usdc_balance, binance_perp_unrealized_pnl, binance_perp_size,
+        state, sol_price, dawnsol_price
       ) VALUES (
         @timestamp, @totalNavUsdc, @lendingBalance, @lendingBreakdown,
         @dawnsolBalance, @dawnsolUsdcValue, @binanceUsdcBalance,
-        @binancePerpUnrealizedPnl, @binancePerpSize, @state,
-        @solPrice, @dawnsolPrice
+        @bufferUsdcBalance, @binancePerpUnrealizedPnl, @binancePerpSize,
+        @state, @solPrice, @dawnsolPrice
       )
     `);
   }
@@ -47,6 +47,7 @@ function snapshotToRow(snapshot: PortfolioSnapshot) {
     dawnsolBalance: snapshot.dawnsolBalance,
     dawnsolUsdcValue: snapshot.dawnsolUsdcValue,
     binanceUsdcBalance: snapshot.binanceUsdcBalance,
+    bufferUsdcBalance: snapshot.bufferUsdcBalance,
     binancePerpUnrealizedPnl: snapshot.binancePerpUnrealizedPnl,
     binancePerpSize: snapshot.binancePerpSize,
     state: snapshot.state,
@@ -64,6 +65,7 @@ function rowToSnapshot(row: Record<string, unknown>): PortfolioSnapshot {
     dawnsolBalance: row['dawnsol_balance'] as number,
     dawnsolUsdcValue: row['dawnsol_usdc_value'] as number,
     binanceUsdcBalance: row['binance_usdc_balance'] as number,
+    bufferUsdcBalance: row['buffer_usdc_balance'] as number,
     binancePerpUnrealizedPnl: row['binance_perp_unrealized_pnl'] as number,
     binancePerpSize: row['binance_perp_size'] as number,
     state: row['state'] as BotState,

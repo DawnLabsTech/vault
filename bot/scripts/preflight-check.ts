@@ -161,10 +161,10 @@ async function checkBinance() {
 
   // Funding rate
   try {
-    const fr = await client.getCurrentFundingRate('SOLUSDT');
+    const fr = await client.getCurrentFundingRate('SOLUSDC');
     const rate = parseFloat(fr.lastFundingRate);
     const annualized = rate * 3 * 365 * 100;
-    console.log(`  FR (SOLUSDT): ${(rate * 100).toFixed(4)}% (annualized ${annualized.toFixed(1)}%)`);
+    console.log(`  FR (SOLUSDC): ${(rate * 100).toFixed(4)}% (annualized ${annualized.toFixed(1)}%)`);
     console.log(`  Mark Price: $${parseFloat(fr.markPrice).toFixed(2)}`);
   } catch (err) {
     console.log(`  ❌ FR fetch failed: ${(err as Error).message}`);
@@ -183,7 +183,7 @@ async function checkBinance() {
 
   // Position
   try {
-    const positions = await client.getPosition('SOLUSDT');
+    const positions = await client.getPosition('SOLUSDC');
     const active = positions.filter((p) => parseFloat(p.positionAmt) !== 0);
     if (active.length === 0) {
       console.log('  Positions: none (clean)');

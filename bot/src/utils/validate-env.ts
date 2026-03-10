@@ -1,23 +1,39 @@
 import { createChildLogger } from './logger.js';
+import type { PerpExchange } from '../types.js';
 
 const log = createChildLogger('env');
 
+export function getPerpExchange(): PerpExchange {
+  const val = (process.env.PERP_EXCHANGE || 'binance').toLowerCase();
+  if (val !== 'binance' && val !== 'drift') {
+    throw new Error(`PERP_EXCHANGE must be "binance" or "drift", got "${val}"`);
+  }
+  return val;
+}
+
 interface EnvVar {
   name: string;
-  required: boolean;
+  required: boolean | (() => boolean);
   sensitive?: boolean;
   validate?: (value: string) => string | null; // returns error message or null
 }
 
+const isBinance = () => getPerpExchange() === 'binance';
+
 const ENV_VARS: EnvVar[] = [
   {
+    name: 'PERP_EXCHANGE',
+    required: false,
+    validate: (v) => ['binance', 'drift'].includes(v.toLowerCase()) ? null : 'Must be "binance" or "drift"',
+  },
+  {
     name: 'BINANCE_API_KEY',
-    required: true,
+    required: isBinance,
     sensitive: true,
   },
   {
     name: 'BINANCE_API_SECRET',
-    required: true,
+    required: isBinance,
     sensitive: true,
   },
   {
@@ -56,11 +72,7 @@ const ENV_VARS: EnvVar[] = [
     required: false,
     sensitive: true,
   },
-  {
-    name: 'BINANCE_USDC_DEPOSIT_ADDRESS',
-    required: false,
-    validate: (v) => v.length >= 32 ? null : 'Address appears too short',
-  },
+  // BINANCE_USDC_DEPOSIT_ADDRESS removed — now fetched dynamically via Binance API
 ];
 
 /**
@@ -73,8 +85,10 @@ export function validateEnv(): void {
   for (const v of ENV_VARS) {
     const value = process.env[v.name];
 
+    const isRequired = typeof v.required === 'function' ? v.required() : v.required;
+
     if (!value || value.trim() === '') {
-      if (v.required) {
+      if (isRequired) {
         errors.push(`${v.name} is required but not set`);
       } else {
         log.warn({ var: v.name }, 'Optional env var not set');

@@ -33,7 +33,7 @@ vault/
 Hybrid on-chain + off-chain architecture:
 
 - **Base Layer:** USDC lending on Kamino / Drift / Jupiter Lend (auto-select best APY)
-- **Aggressive Layer:** Delta-neutral via USDC → SOL → dawnSOL (on-chain, Jupiter) + SOL-PERP short (Binance Futures)
+- **Aggressive Layer:** Delta-neutral via USDC → dawnSOL (on-chain, Jupiter) + SOL-PERP short (Binance Futures), executed in parallel
   - dawnSOL provides ~7% staking yield on the long leg
   - 1x leverage only (no liquidation risk on perp side)
   - Activated only when SOL funding rate is sufficiently positive
@@ -60,9 +60,26 @@ Hybrid on-chain + off-chain architecture:
 | FR Monitor | Binance SOL-PERP funding rate polling & threshold check |
 | State Machine | BASE_ONLY ⇔ BASE+DN state transitions |
 | Lending Aggregator | Kamino / Drift / Jupiter Lend APY comparison & auto-routing |
-| dawnSOL Swap | USDC ⇔ SOL ⇔ dawnSOL swap via Jupiter API |
+| dawnSOL Swap | USDC ⇔ dawnSOL swap via Jupiter API |
 | Binance Executor | SOL-PERP short open/close, margin management |
 | Risk Manager | FR reversal detection, anomaly detection, auto-exit |
+
+## Research Notes
+
+### Hyperliquid SOL Perp (2026-03, Declined)
+
+Evaluated Hyperliquid SOL Perp as an alternative short leg for the DN strategy. Compared 90 days of funding rate data against Binance — did not meet the threshold.
+
+| Period | Hyperliquid | Binance | Diff |
+|---|---|---|---|
+| 7d avg | -6.25% | -4.97% | -1.28% |
+| 30d avg | -9.47% | -6.96% | -2.51% |
+| 90d avg | -3.20% | -3.21% | +0.01% |
+
+- Threshold: annualized FR >= 5% → Go / otherwise → Decline
+- Result: **NO-GO** (both exchanges in negative FR regime, no advantage for Hyperliquid)
+- Script: `bot/scripts/compare-funding-rates.ts`
+- May revisit if market conditions change
 
 ## Development
 

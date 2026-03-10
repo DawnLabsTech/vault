@@ -15,10 +15,17 @@ function makeConfig(overrides: { dryRun?: boolean } = {}): VaultConfig {
       lendingRebalanceIntervalMs: 21_600_000,
       dailyPnlTimeUtc: '00:00',
     },
+    perp: {
+      exchange: 'binance' as const,
+      symbol: 'SOLUSDC',
+      leverage: 1,
+      swapSlippageBps: 50,
+    },
     binance: {
-      symbol: 'SOLUSDT',
+      symbol: 'SOLUSDC',
       leverage: 1,
       testnet: true,
+      swapSlippageBps: 50,
     },
     solana: { network: 'devnet' },
     thresholds: {
@@ -63,7 +70,7 @@ function makeMockBinanceRest() {
       avgPrice: '150.15',
       cumQuote: '1000.00',
       status: 'FILLED',
-      symbol: 'SOLUSDT',
+      symbol: 'SOLUSDC',
       side: 'BUY',
       type: 'MARKET',
       clientOrderId: '',
@@ -80,7 +87,7 @@ function makeMockBinanceRest() {
     getWithdrawHistory: vi.fn().mockResolvedValue([]),
     getPosition: vi.fn().mockResolvedValue([
       {
-        symbol: 'SOLUSDT',
+        symbol: 'SOLUSDC',
         positionAmt: '-6.660',
         unrealizedProfit: '12.50',
         entryPrice: '150.15',
@@ -94,7 +101,7 @@ function makeMockBinanceRest() {
       },
     ]),
     getCurrentFundingRate: vi.fn().mockResolvedValue({
-      symbol: 'SOLUSDT',
+      symbol: 'SOLUSDC',
       markPrice: '150.00',
       indexPrice: '150.05',
       estimatedSettlePrice: '150.00',
@@ -106,7 +113,7 @@ function makeMockBinanceRest() {
     setLeverage: vi.fn().mockResolvedValue({
       leverage: 1,
       maxNotionalValue: '1000000',
-      symbol: 'SOLUSDT',
+      symbol: 'SOLUSDC',
     }),
     getBalance: vi.fn().mockResolvedValue([]),
     getAccount: vi.fn().mockResolvedValue({}),
@@ -217,17 +224,8 @@ describe('DN Connectors — dryRun mode', () => {
   });
 
   it('transferUsdcToBinance returns dry-run tx', async () => {
-    process.env.BINANCE_USDC_DEPOSIT_ADDRESS = 'FakeDepositAddress1111111111111111111111111';
     const tx = await connectors.transferUsdcToBinance(500);
     expect(tx).toBe('dry-run-transfer-usdc-tx');
-    delete process.env.BINANCE_USDC_DEPOSIT_ADDRESS;
-  });
-
-  it('transferUsdcToBinance throws without env var', async () => {
-    delete process.env.BINANCE_USDC_DEPOSIT_ADDRESS;
-    await expect(connectors.transferUsdcToBinance(500)).rejects.toThrow(
-      'BINANCE_USDC_DEPOSIT_ADDRESS',
-    );
   });
 
   it('waitForBinanceDeposit returns true immediately', async () => {
@@ -235,27 +233,17 @@ describe('DN Connectors — dryRun mode', () => {
     expect(result).toBe(true);
   });
 
-  it('buySolOnBinance returns mock values', async () => {
-    const result = await connectors.buySolOnBinance(1500);
-    expect(result.solAmount).toBeCloseTo(10, 0); // 1500 / 150
-    expect(result.avgPrice).toBe(150);
-    expect(result.orderId).toBe('dry-run-order');
-  });
-
-  it('withdrawSolFromBinance returns dry-run id', async () => {
-    const id = await connectors.withdrawSolFromBinance(10, 'SomeAddress');
-    expect(id).toBe('dry-run-withdraw-sol-id');
-  });
-
-  it('waitForSolWithdrawal returns true immediately', async () => {
-    const result = await connectors.waitForSolWithdrawal('some-id', 10_000);
-    expect(result).toBe(true);
-  });
-
-  it('swapSolToDawnSol returns mock dawnSOL amount', async () => {
-    const result = await connectors.swapSolToDawnSol(10);
-    expect(result.dawnsolAmount).toBeCloseTo(9.5, 1); // 10 * 0.95
+  it('swapUsdcToDawnSol returns mock dawnSOL amount', async () => {
+    const result = await connectors.swapUsdcToDawnSol(1500);
+    const expectedSol = 1500 / 150;
+    const expectedDawnsol = expectedSol * 0.95;
+    expect(result.dawnsolAmount).toBeCloseTo(expectedDawnsol, 1);
     expect(result.txSig).toContain('dry-run');
+  });
+
+  it('getSolPrice returns mock price', async () => {
+    const price = await connectors.getSolPrice();
+    expect(price).toBe(150);
   });
 
   it('openPerpShort returns mock position', async () => {
@@ -287,6 +275,20 @@ describe('DN Connectors — dryRun mode', () => {
     const tx = await connectors.depositToLending(1500);
     expect(tx).toBe('dry-run-deposit-lending-tx');
   });
+
+  it('transferSpotToFutures returns without calling API', async () => {
+    await connectors.transferSpotToFutures(500);
+    // Should not call binanceRest in dry-run mode
+  });
+
+  it('transferFuturesToSpot returns without calling API', async () => {
+    await connectors.transferFuturesToSpot(500);
+  });
+
+  it('getFuturesUsdcBalance returns mock balance', async () => {
+    const balance = await connectors.getFuturesUsdcBalance();
+    expect(balance).toBe(500);
+  });
 });
 
 describe('DN Connectors — live mode (mocked deps)', () => {
@@ -312,50 +314,34 @@ describe('DN Connectors — live mode (mocked deps)', () => {
     );
   });
 
-  it('buySolOnBinance gets price and places market order', async () => {
-    const result = await connectors.buySolOnBinance(1000);
-    expect(mocks.binanceRest.getCurrentFundingRate).toHaveBeenCalledWith('SOLUSDT');
-    expect(mocks.binanceRest.placeOrder).toHaveBeenCalledWith(
-      expect.objectContaining({
-        symbol: 'SOLUSDT',
-        side: 'BUY',
-        type: 'MARKET',
-      }),
+  it('swapUsdcToDawnSol calls Jupiter and confirms', async () => {
+    const result = await connectors.swapUsdcToDawnSol(1000);
+
+    expect(mocks.jupiterSwap.getSwapTransaction).toHaveBeenCalledWith(
+      expect.any(String), // USDC mint
+      expect.any(String), // DAWNSOL mint
+      1_000_000_000,      // 1000 USDC in base units (6 decimals)
+      50,
     );
-    // Returned from mock order
-    expect(result.solAmount).toBe(6.66);
-    expect(result.avgPrice).toBe(150.15);
-    expect(result.orderId).toBe('12345');
+    expect(mocks.txSender.signAndSendBase64).toHaveBeenCalledWith('base64-mock-tx');
+    expect(mocks.txSender.confirm).toHaveBeenCalledWith('mock-tx-sig');
+    expect(result.dawnsolAmount).toBeCloseTo(0.95, 2); // 950_000_000 / 1e9
+    expect(result.txSig).toBe('mock-tx-sig');
   });
 
-  it('buySolOnBinance truncates quantity to 3 decimals', async () => {
-    // price = 150, amount = 1000 → qty = 6.666... → truncated to 6.666
-    const result = await connectors.buySolOnBinance(1000);
-    const call = mocks.binanceRest.placeOrder.mock.calls[0]![0] as any;
-    const qty = parseFloat(call.quantity);
-    // Verify it has at most 3 decimal places
-    expect(call.quantity).toMatch(/^\d+\.\d{1,3}$/);
-    expect(qty).toBeLessThanOrEqual(1000 / 150);
-  });
-
-  it('withdrawSolFromBinance calls Binance withdraw', async () => {
-    const id = await connectors.withdrawSolFromBinance(5, 'SolAddress123');
-    expect(id).toBe('withdraw-id-123');
-    expect(mocks.binanceRest.withdraw).toHaveBeenCalledWith(
-      'SOL',
-      'SolAddress123',
-      '5',
-      'SOL',
-    );
+  it('getSolPrice returns mark price from Binance', async () => {
+    const price = await connectors.getSolPrice();
+    expect(mocks.binanceRest.getCurrentFundingRate).toHaveBeenCalledWith('SOLUSDC');
+    expect(price).toBe(150);
   });
 
   it('openPerpShort sets leverage then places sell order', async () => {
     const result = await connectors.openPerpShort(10);
 
-    expect(mocks.binanceRest.setLeverage).toHaveBeenCalledWith('SOLUSDT', 1);
+    expect(mocks.binanceRest.setLeverage).toHaveBeenCalledWith('SOLUSDC', 1);
     expect(mocks.binanceRest.placeOrder).toHaveBeenCalledWith(
       expect.objectContaining({
-        symbol: 'SOLUSDT',
+        symbol: 'SOLUSDC',
         side: 'SELL',
         type: 'MARKET',
         quantity: '10',
@@ -368,10 +354,10 @@ describe('DN Connectors — live mode (mocked deps)', () => {
   it('closePerpShort reads position and buys back', async () => {
     const result = await connectors.closePerpShort();
 
-    expect(mocks.binanceRest.getPosition).toHaveBeenCalledWith('SOLUSDT');
+    expect(mocks.binanceRest.getPosition).toHaveBeenCalledWith('SOLUSDC');
     expect(mocks.binanceRest.placeOrder).toHaveBeenCalledWith(
       expect.objectContaining({
-        symbol: 'SOLUSDT',
+        symbol: 'SOLUSDC',
         side: 'BUY',
         type: 'MARKET',
         quantity: '6.66',
@@ -388,7 +374,7 @@ describe('DN Connectors — live mode (mocked deps)', () => {
     // Override with empty position
     mocks.binanceRest.getPosition.mockResolvedValue([
       {
-        symbol: 'SOLUSDT',
+        symbol: 'SOLUSDC',
         positionAmt: '0',
         unrealizedProfit: '0',
         entryPrice: '0',
@@ -402,25 +388,17 @@ describe('DN Connectors — live mode (mocked deps)', () => {
       },
     ]);
     await expect(connectors.closePerpShort()).rejects.toThrow(
-      'No open SOLUSDT position found',
+      'No open SOLUSDC position found',
     );
   });
 
   // ── Swap methods ──────────────────────────────────────────
 
-  it('swapSolToDawnSol calls Jupiter and confirms', async () => {
-    const result = await connectors.swapSolToDawnSol(10);
-
-    expect(mocks.jupiterSwap.getSwapTransaction).toHaveBeenCalledWith(
-      expect.any(String), // SOL mint
-      expect.any(String), // DAWNSOL mint
-      10_000_000_000,     // 10 SOL in lamports
-      50,
-    );
-    expect(mocks.txSender.signAndSendBase64).toHaveBeenCalledWith('base64-mock-tx');
-    expect(mocks.txSender.confirm).toHaveBeenCalledWith('mock-tx-sig');
-    expect(result.dawnsolAmount).toBeCloseTo(0.95, 2); // 950_000_000 / 1e9
-    expect(result.txSig).toBe('mock-tx-sig');
+  it('swapUsdcToDawnSol does not call Binance for price', async () => {
+    mocks.binanceRest.getCurrentFundingRate.mockClear();
+    await connectors.swapUsdcToDawnSol(500);
+    // swapUsdcToDawnSol should no longer call Binance for price
+    expect(mocks.binanceRest.getCurrentFundingRate).not.toHaveBeenCalled();
   });
 
   it('swapDawnSolToSol calls Jupiter with reversed mints', async () => {
@@ -451,10 +429,10 @@ describe('DN Connectors — live mode (mocked deps)', () => {
     expect(result.txSig).toBe('mock-tx-sig');
   });
 
-  it('swap throws when confirmation fails', async () => {
+  it('swapUsdcToDawnSol throws when confirmation fails', async () => {
     mocks.txSender.confirm.mockResolvedValue(false);
 
-    await expect(connectors.swapSolToDawnSol(10)).rejects.toThrow(
+    await expect(connectors.swapUsdcToDawnSol(500)).rejects.toThrow(
       'failed to confirm',
     );
   });
@@ -472,5 +450,34 @@ describe('DN Connectors — live mode (mocked deps)', () => {
     await expect(connectors.depositToLending(1500)).rejects.toThrow(
       'No lending protocols available',
     );
+  });
+
+  // ── Internal transfer ──────────────────────────────────────
+
+  it('transferSpotToFutures calls Binance transfer API', async () => {
+    mocks.binanceRest.transferSpotToFutures = vi.fn().mockResolvedValue({ tranId: 123 });
+    await connectors.transferSpotToFutures(500);
+    expect(mocks.binanceRest.transferSpotToFutures).toHaveBeenCalledWith('USDC', '500');
+  });
+
+  it('transferFuturesToSpot calls Binance transfer API', async () => {
+    mocks.binanceRest.transferFuturesToSpot = vi.fn().mockResolvedValue({ tranId: 456 });
+    await connectors.transferFuturesToSpot(500);
+    expect(mocks.binanceRest.transferFuturesToSpot).toHaveBeenCalledWith('USDC', '500');
+  });
+
+  it('getFuturesUsdcBalance returns USDC available balance', async () => {
+    mocks.binanceRest.getBalance.mockResolvedValue([
+      { asset: 'USDC', balance: '1000.00', availableBalance: '800.50', crossWalletBalance: '1000.00' },
+      { asset: 'USDT', balance: '0.00', availableBalance: '0.00', crossWalletBalance: '0.00' },
+    ]);
+    const balance = await connectors.getFuturesUsdcBalance();
+    expect(balance).toBe(800.5);
+  });
+
+  it('getFuturesUsdcBalance returns 0 when no USDC', async () => {
+    mocks.binanceRest.getBalance.mockResolvedValue([]);
+    const balance = await connectors.getFuturesUsdcBalance();
+    expect(balance).toBe(0);
   });
 });

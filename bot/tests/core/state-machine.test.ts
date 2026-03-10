@@ -14,10 +14,17 @@ const config: VaultConfig = {
     lendingRebalanceIntervalMs: 21_600_000,
     dailyPnlTimeUtc: '00:00',
   },
+  perp: {
+    exchange: 'binance' as const,
+    symbol: 'SOLUSDC',
+    leverage: 1,
+    swapSlippageBps: 50,
+  },
   binance: {
-    symbol: 'SOLUSDT',
+    symbol: 'SOLUSDC',
     leverage: 1,
     testnet: true,
+    swapSlippageBps: 50,
   },
   solana: {
     network: 'devnet',

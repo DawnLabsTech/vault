@@ -7,10 +7,17 @@
     "lendingRebalanceIntervalMs": 21600000,
     "dailyPnlTimeUtc": "00:00"
   },
-  "binance": {
-    "symbol": "SOLUSDT",
+  "perp": {
+    "exchange": "binance",
+    "symbol": "SOLUSDC",
     "leverage": 1,
-    "testnet": false
+    "swapSlippageBps": 50
+  },
+  "binance": {
+    "symbol": "SOLUSDC",
+    "leverage": 1,
+    "testnet": false,
+    "swapSlippageBps": 50
   },
   "solana": {
     "network": "mainnet-beta"

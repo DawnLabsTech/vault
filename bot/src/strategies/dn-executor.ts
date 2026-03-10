@@ -11,17 +11,14 @@ export enum DnStep {
   IDLE = 'IDLE',
   // Entry steps
   WITHDRAW_LENDING = 'WITHDRAW_LENDING',
-  TRANSFER_TO_BINANCE = 'TRANSFER_TO_BINANCE',
+  TRANSFER_MARGIN_TO_BINANCE = 'TRANSFER_MARGIN_TO_BINANCE',
   WAIT_BINANCE_DEPOSIT = 'WAIT_BINANCE_DEPOSIT',
-  BUY_SOL_BINANCE = 'BUY_SOL_BINANCE',
-  WITHDRAW_SOL_BINANCE = 'WITHDRAW_SOL_BINANCE',
-  WAIT_SOL_WITHDRAWAL = 'WAIT_SOL_WITHDRAWAL',
-  SWAP_SOL_DAWNSOL = 'SWAP_SOL_DAWNSOL',
-  OPEN_PERP_SHORT = 'OPEN_PERP_SHORT',
+  TRANSFER_SPOT_TO_FUTURES = 'TRANSFER_SPOT_TO_FUTURES',
+  OPEN_BOTH_LEGS = 'OPEN_BOTH_LEGS', // parallel: USDC→dawnSOL + perp short
   ENTRY_COMPLETE = 'ENTRY_COMPLETE',
   // Exit steps
-  CLOSE_PERP_SHORT = 'CLOSE_PERP_SHORT',
-  SWAP_DAWNSOL_SOL = 'SWAP_DAWNSOL_SOL',
+  CLOSE_BOTH_LEGS = 'CLOSE_BOTH_LEGS', // parallel: close short + dawnSOL→SOL
+  TRANSFER_FUTURES_TO_SPOT = 'TRANSFER_FUTURES_TO_SPOT',
   SWAP_SOL_USDC = 'SWAP_SOL_USDC',
   DEPOSIT_LENDING = 'DEPOSIT_LENDING',
   EXIT_COMPLETE = 'EXIT_COMPLETE',
@@ -34,6 +31,8 @@ export enum DnStep {
 export interface DnExecutorState {
   currentStep: DnStep;
   entryAmount: number;
+  marginAmount: number; // USDC sent to Binance as short margin
+  longAmount: number; // USDC used for on-chain dawnSOL swap
   solAmount: number;
   dawnsolAmount: number;
   perpSize: number;
@@ -48,20 +47,10 @@ export interface DnConnectors {
   withdrawFromLending(amount: number): Promise<string>;
   transferUsdcToBinance(amount: number): Promise<string>;
   waitForBinanceDeposit(amount: number, timeoutMs: number): Promise<boolean>;
-  buySolOnBinance(
+  swapUsdcToDawnSol(
     usdcAmount: number,
-  ): Promise<{ solAmount: number; avgPrice: number; orderId: string }>;
-  withdrawSolFromBinance(
-    solAmount: number,
-    address: string,
-  ): Promise<string>;
-  waitForSolWithdrawal(
-    withdrawId: string,
-    timeoutMs: number,
-  ): Promise<boolean>;
-  swapSolToDawnSol(
-    solAmount: number,
   ): Promise<{ dawnsolAmount: number; txSig: string }>;
+  getSolPrice(): Promise<number>;
   openPerpShort(
     solAmount: number,
   ): Promise<{ size: number; entryPrice: number; orderId: string }>;
@@ -73,17 +62,21 @@ export interface DnConnectors {
     solAmount: number,
   ): Promise<{ usdcAmount: number; txSig: string }>;
   depositToLending(usdcAmount: number): Promise<string>;
+  transferSpotToFutures(amount: number): Promise<void>;
+  transferFuturesToSpot(amount: number): Promise<void>;
+  getFuturesUsdcBalance(): Promise<number>;
 }
 
 // ── Defaults ───────────────────────────────────────────────────────────────
 
 const BINANCE_DEPOSIT_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
-const SOL_WITHDRAWAL_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
 
 function emptyState(): DnExecutorState {
   return {
     currentStep: DnStep.IDLE,
     entryAmount: 0,
+    marginAmount: 0,
+    longAmount: 0,
     solAmount: 0,
     dawnsolAmount: 0,
     perpSize: 0,
@@ -121,29 +114,40 @@ export class DnExecutor {
   }
 
   // ── Entry flow ─────────────────────────────────────────────────────────
+  //
+  // 1. WITHDRAW_LENDING           — withdraw total USDC from lending
+  // 2. TRANSFER_MARGIN_TO_BINANCE — send half (margin) to Binance
+  // 3. WAIT_BINANCE_DEPOSIT       — wait for deposit confirmation
+  // 4. OPEN_BOTH_LEGS (parallel)  — USDC→dawnSOL on-chain + SOL short on Binance
+  //
 
   async startEntry(usdcAmount: number): Promise<DnExecutorState> {
     log.info({ usdcAmount }, 'Starting DN entry');
     this.state = emptyState();
     this.state.entryAmount = usdcAmount;
+    // Split: half for Binance margin, half for on-chain dawnSOL
+    this.state.marginAmount = round(usdcAmount / 2, 2);
+    this.state.longAmount = round(usdcAmount - this.state.marginAmount, 2);
     this.events = [];
 
-    const entrySteps: DnStep[] = [
+    const sequentialSteps: DnStep[] = [
       DnStep.WITHDRAW_LENDING,
-      DnStep.TRANSFER_TO_BINANCE,
+      DnStep.TRANSFER_MARGIN_TO_BINANCE,
       DnStep.WAIT_BINANCE_DEPOSIT,
-      DnStep.BUY_SOL_BINANCE,
-      DnStep.WITHDRAW_SOL_BINANCE,
-      DnStep.WAIT_SOL_WITHDRAWAL,
-      DnStep.SWAP_SOL_DAWNSOL,
-      DnStep.OPEN_PERP_SHORT,
+      DnStep.TRANSFER_SPOT_TO_FUTURES,
     ];
 
-    for (const step of entrySteps) {
+    for (const step of sequentialSteps) {
       const ok = await this.executeStep(step);
       if (!ok) {
         return this.state;
       }
+    }
+
+    // Open both legs simultaneously to minimize delta exposure
+    const ok = await this.executeStep(DnStep.OPEN_BOTH_LEGS);
+    if (!ok) {
+      return this.state;
     }
 
     this.transition(DnStep.ENTRY_COMPLETE);
@@ -152,20 +156,24 @@ export class DnExecutor {
   }
 
   // ── Exit flow ──────────────────────────────────────────────────────────
+  //
+  // 1. CLOSE_BOTH_LEGS (parallel) — close short + dawnSOL→SOL simultaneously
+  // 2. SWAP_SOL_USDC              — convert SOL back to USDC
+  // 3. DEPOSIT_LENDING            — deposit to best APY protocol
+  //
 
   async startExit(): Promise<DnExecutorState> {
     log.info('Starting DN exit');
     this.events = [];
 
-    const exitSteps: DnStep[] = [
-      DnStep.CLOSE_PERP_SHORT,
-      DnStep.SWAP_DAWNSOL_SOL,
-      DnStep.SWAP_SOL_USDC,
-      DnStep.DEPOSIT_LENDING,
-    ];
+    // Close both legs simultaneously
+    let ok = await this.executeStep(DnStep.CLOSE_BOTH_LEGS);
+    if (!ok) {
+      return this.state;
+    }
 
-    for (const step of exitSteps) {
-      const ok = await this.executeStep(step);
+    for (const step of [DnStep.TRANSFER_FUTURES_TO_SPOT, DnStep.SWAP_SOL_USDC, DnStep.DEPOSIT_LENDING]) {
+      ok = await this.executeStep(step);
       if (!ok) {
         return this.state;
       }
@@ -199,22 +207,18 @@ export class DnExecutor {
     log.info({ failedStep }, 'Resuming DN execution from failed step');
     this.state.error = undefined;
 
-    // Determine remaining steps based on which flow we're in
-    const isEntryStep = this.isEntryStep(failedStep);
-    const allSteps = isEntryStep
+    const isEntry = this.isEntryStep(failedStep);
+    const allSteps = isEntry
       ? [
           DnStep.WITHDRAW_LENDING,
-          DnStep.TRANSFER_TO_BINANCE,
+          DnStep.TRANSFER_MARGIN_TO_BINANCE,
           DnStep.WAIT_BINANCE_DEPOSIT,
-          DnStep.BUY_SOL_BINANCE,
-          DnStep.WITHDRAW_SOL_BINANCE,
-          DnStep.WAIT_SOL_WITHDRAWAL,
-          DnStep.SWAP_SOL_DAWNSOL,
-          DnStep.OPEN_PERP_SHORT,
+          DnStep.TRANSFER_SPOT_TO_FUTURES,
+          DnStep.OPEN_BOTH_LEGS,
         ]
       : [
-          DnStep.CLOSE_PERP_SHORT,
-          DnStep.SWAP_DAWNSOL_SOL,
+          DnStep.CLOSE_BOTH_LEGS,
+          DnStep.TRANSFER_FUTURES_TO_SPOT,
           DnStep.SWAP_SOL_USDC,
           DnStep.DEPOSIT_LENDING,
         ];
@@ -229,7 +233,7 @@ export class DnExecutor {
       }
     }
 
-    const completeStep = isEntryStep
+    const completeStep = isEntry
       ? DnStep.ENTRY_COMPLETE
       : DnStep.EXIT_COMPLETE;
     this.transition(completeStep);
@@ -245,24 +249,18 @@ export class DnExecutor {
       switch (step) {
         case DnStep.WITHDRAW_LENDING:
           return await this.stepWithdrawLending();
-        case DnStep.TRANSFER_TO_BINANCE:
-          return await this.stepTransferToBinance();
+        case DnStep.TRANSFER_MARGIN_TO_BINANCE:
+          return await this.stepTransferMarginToBinance();
         case DnStep.WAIT_BINANCE_DEPOSIT:
           return await this.stepWaitBinanceDeposit();
-        case DnStep.BUY_SOL_BINANCE:
-          return await this.stepBuySolBinance();
-        case DnStep.WITHDRAW_SOL_BINANCE:
-          return await this.stepWithdrawSolBinance();
-        case DnStep.WAIT_SOL_WITHDRAWAL:
-          return await this.stepWaitSolWithdrawal();
-        case DnStep.SWAP_SOL_DAWNSOL:
-          return await this.stepSwapSolToDawnSol();
-        case DnStep.OPEN_PERP_SHORT:
-          return await this.stepOpenPerpShort();
-        case DnStep.CLOSE_PERP_SHORT:
-          return await this.stepClosePerpShort();
-        case DnStep.SWAP_DAWNSOL_SOL:
-          return await this.stepSwapDawnSolToSol();
+        case DnStep.TRANSFER_SPOT_TO_FUTURES:
+          return await this.stepTransferSpotToFutures();
+        case DnStep.OPEN_BOTH_LEGS:
+          return await this.stepOpenBothLegs();
+        case DnStep.CLOSE_BOTH_LEGS:
+          return await this.stepCloseBothLegs();
+        case DnStep.TRANSFER_FUTURES_TO_SPOT:
+          return await this.stepTransferFuturesToSpot();
         case DnStep.SWAP_SOL_USDC:
           return await this.stepSwapSolToUsdc();
         case DnStep.DEPOSIT_LENDING:
@@ -306,26 +304,29 @@ export class DnExecutor {
     return true;
   }
 
-  private async stepTransferToBinance(): Promise<boolean> {
+  private async stepTransferMarginToBinance(): Promise<boolean> {
     const txSig = await this.connectors.transferUsdcToBinance(
-      this.state.entryAmount,
+      this.state.marginAmount,
     );
-    this.recordTx(DnStep.TRANSFER_TO_BINANCE, txSig);
+    this.recordTx(DnStep.TRANSFER_MARGIN_TO_BINANCE, txSig);
     this.events.push({
       timestamp: new Date().toISOString(),
       eventType: EventType.TRANSFER,
-      amount: this.state.entryAmount,
+      amount: this.state.marginAmount,
       asset: 'USDC',
       txHash: txSig,
-      metadata: { action: 'dn_entry_transfer_to_binance' },
+      metadata: { action: 'dn_entry_transfer_margin_to_binance' },
     });
-    log.info({ amount: this.state.entryAmount, txSig }, 'USDC transferred to Binance');
+    log.info(
+      { amount: this.state.marginAmount, txSig },
+      'Margin USDC transferred to Binance',
+    );
     return true;
   }
 
   private async stepWaitBinanceDeposit(): Promise<boolean> {
     const arrived = await this.connectors.waitForBinanceDeposit(
-      this.state.entryAmount,
+      this.state.marginAmount,
       BINANCE_DEPOSIT_TIMEOUT_MS,
     );
     if (!arrived) {
@@ -333,175 +334,198 @@ export class DnExecutor {
         `Binance deposit not confirmed within ${BINANCE_DEPOSIT_TIMEOUT_MS / 1000}s`,
       );
     }
-    log.info({ amount: this.state.entryAmount }, 'Binance deposit confirmed');
+    log.info({ amount: this.state.marginAmount }, 'Binance deposit confirmed');
     return true;
   }
 
-  private async stepBuySolBinance(): Promise<boolean> {
-    const result = await this.connectors.buySolOnBinance(
-      this.state.entryAmount,
-    );
-    this.state.solAmount = result.solAmount;
-    this.recordTx(DnStep.BUY_SOL_BINANCE, result.orderId);
-    this.events.push({
-      timestamp: new Date().toISOString(),
-      eventType: EventType.SWAP,
-      amount: result.solAmount,
-      asset: 'SOL',
-      price: result.avgPrice,
-      orderId: result.orderId,
-      metadata: {
-        action: 'dn_entry_buy_sol',
-        usdcSpent: this.state.entryAmount,
-        avgPrice: result.avgPrice,
-      },
-    });
+  /**
+   * Open both legs in parallel to minimise delta exposure:
+   *   - On-chain: USDC → dawnSOL via Jupiter
+   *   - Binance:  SOL perpetual short
+   *
+   * Uses Promise.allSettled so that if one leg fails, the other's result
+   * is still recorded in state (critical for irreversible on-chain swaps).
+   * Skips already-completed legs on resume.
+   */
+  private async stepOpenBothLegs(): Promise<boolean> {
+    // Get SOL price to size the short leg
+    const solPrice = await this.connectors.getSolPrice();
+    const shortSolAmount = round(this.state.longAmount / solPrice, 3);
+
     log.info(
-      { solAmount: result.solAmount, avgPrice: result.avgPrice },
-      'Bought SOL on Binance',
+      { longUsdc: this.state.longAmount, shortSol: shortSolAmount, solPrice },
+      'Opening both legs in parallel',
     );
-    return true;
-  }
 
-  private async stepWithdrawSolBinance(): Promise<boolean> {
-    const withdrawId = await this.connectors.withdrawSolFromBinance(
-      this.state.solAmount,
-      this.solanaAddress,
-    );
-    this.recordTx(DnStep.WITHDRAW_SOL_BINANCE, withdrawId);
-    // Store withdrawId in metadata for the wait step
-    const lastEntry = this.state.txHistory[this.state.txHistory.length - 1];
-    if (lastEntry) lastEntry.txSig = withdrawId;
-    this.events.push({
-      timestamp: new Date().toISOString(),
-      eventType: EventType.TRANSFER,
-      amount: this.state.solAmount,
-      asset: 'SOL',
-      txHash: withdrawId,
-      metadata: {
-        action: 'dn_entry_withdraw_sol_binance',
-        destinationAddress: this.solanaAddress,
-      },
-    });
-    log.info(
-      { solAmount: this.state.solAmount, withdrawId },
-      'SOL withdrawal from Binance initiated',
-    );
-    return true;
-  }
+    // Skip already-completed legs (for resume after partial failure)
+    const swapPromise =
+      this.state.dawnsolAmount > 0
+        ? Promise.resolve(null)
+        : this.connectors.swapUsdcToDawnSol(this.state.longAmount);
 
-  private async stepWaitSolWithdrawal(): Promise<boolean> {
-    // Get withdrawId from the previous step
-    const withdrawEntry = this.state.txHistory.find(
-      (t) => t.step === DnStep.WITHDRAW_SOL_BINANCE,
-    );
-    const withdrawId = withdrawEntry?.txSig ?? '';
+    const shortPromise =
+      this.state.perpSize > 0
+        ? Promise.resolve(null)
+        : this.connectors.openPerpShort(shortSolAmount);
 
-    const arrived = await this.connectors.waitForSolWithdrawal(
-      withdrawId,
-      SOL_WITHDRAWAL_TIMEOUT_MS,
-    );
-    if (!arrived) {
-      throw new Error(
-        `SOL withdrawal not confirmed within ${SOL_WITHDRAWAL_TIMEOUT_MS / 1000}s`,
-      );
+    const [swapSettled, shortSettled] = await Promise.allSettled([
+      swapPromise,
+      shortPromise,
+    ]);
+
+    // Record swap leg if fulfilled
+    if (swapSettled.status === 'fulfilled' && swapSettled.value !== null) {
+      const swapResult = swapSettled.value;
+      this.state.dawnsolAmount = swapResult.dawnsolAmount;
+      this.recordTx(DnStep.OPEN_BOTH_LEGS, swapResult.txSig);
+      this.events.push({
+        timestamp: new Date().toISOString(),
+        eventType: EventType.SWAP,
+        amount: swapResult.dawnsolAmount,
+        asset: 'dawnSOL',
+        txHash: swapResult.txSig,
+        metadata: {
+          action: 'dn_entry_swap_usdc_dawnsol',
+          usdcSpent: this.state.longAmount,
+          dawnsolReceived: swapResult.dawnsolAmount,
+          solEquivalent: shortSolAmount,
+        },
+      });
     }
-    log.info({ solAmount: this.state.solAmount }, 'SOL withdrawal confirmed');
-    return true;
-  }
 
-  private async stepSwapSolToDawnSol(): Promise<boolean> {
-    const result = await this.connectors.swapSolToDawnSol(this.state.solAmount);
-    this.state.dawnsolAmount = result.dawnsolAmount;
-    this.recordTx(DnStep.SWAP_SOL_DAWNSOL, result.txSig);
-    this.events.push({
-      timestamp: new Date().toISOString(),
-      eventType: EventType.SWAP,
-      amount: result.dawnsolAmount,
-      asset: 'dawnSOL',
-      txHash: result.txSig,
-      metadata: {
-        action: 'dn_entry_swap_sol_dawnsol',
-        solSpent: this.state.solAmount,
-        dawnsolReceived: result.dawnsolAmount,
-      },
-    });
+    // Record short leg if fulfilled
+    if (shortSettled.status === 'fulfilled' && shortSettled.value !== null) {
+      const shortResult = shortSettled.value;
+      this.state.perpSize = shortResult.size;
+      this.state.perpEntryPrice = shortResult.entryPrice;
+      this.recordTx(DnStep.OPEN_BOTH_LEGS, shortResult.orderId);
+      this.events.push({
+        timestamp: new Date().toISOString(),
+        eventType: EventType.PERP_OPEN,
+        amount: shortResult.size,
+        asset: 'SOL',
+        price: shortResult.entryPrice,
+        orderId: shortResult.orderId,
+        metadata: {
+          action: 'dn_entry_open_short',
+          size: shortResult.size,
+          entryPrice: shortResult.entryPrice,
+        },
+      });
+    }
+
+    // Check for failures and throw with details
+    const errors: string[] = [];
+    if (swapSettled.status === 'rejected') {
+      errors.push(`swap: ${swapSettled.reason instanceof Error ? swapSettled.reason.message : String(swapSettled.reason)}`);
+    }
+    if (shortSettled.status === 'rejected') {
+      errors.push(`short: ${shortSettled.reason instanceof Error ? shortSettled.reason.message : String(shortSettled.reason)}`);
+    }
+
+    if (errors.length > 0) {
+      throw new Error(errors.join('; '));
+    }
+
     log.info(
-      { solSpent: this.state.solAmount, dawnsolReceived: result.dawnsolAmount },
-      'Swapped SOL -> dawnSOL',
+      {
+        dawnsolAmount: this.state.dawnsolAmount,
+        perpSize: this.state.perpSize,
+        perpEntryPrice: this.state.perpEntryPrice,
+      },
+      'Both legs opened',
     );
     return true;
   }
 
-  private async stepOpenPerpShort(): Promise<boolean> {
-    const result = await this.connectors.openPerpShort(this.state.solAmount);
-    this.state.perpSize = result.size;
-    this.state.perpEntryPrice = result.entryPrice;
-    this.recordTx(DnStep.OPEN_PERP_SHORT, result.orderId);
-    this.events.push({
-      timestamp: new Date().toISOString(),
-      eventType: EventType.PERP_OPEN,
-      amount: result.size,
-      asset: 'SOL',
-      price: result.entryPrice,
-      orderId: result.orderId,
-      metadata: {
-        action: 'dn_entry_open_short',
-        size: result.size,
-        entryPrice: result.entryPrice,
-      },
-    });
+  /**
+   * Close both legs in parallel to minimise delta exposure:
+   *   - Binance:  close perpetual short
+   *   - On-chain: dawnSOL → SOL via Jupiter
+   *
+   * Uses Promise.allSettled so that if one leg fails, the other's result
+   * is still recorded in state. Skips already-completed legs on resume.
+   */
+  private async stepCloseBothLegs(): Promise<boolean> {
     log.info(
-      { size: result.size, entryPrice: result.entryPrice },
-      'Opened PERP short',
+      { perpSize: this.state.perpSize, dawnsolAmount: this.state.dawnsolAmount },
+      'Closing both legs in parallel',
     );
-    return true;
-  }
 
-  private async stepClosePerpShort(): Promise<boolean> {
-    const result = await this.connectors.closePerpShort();
-    this.recordTx(DnStep.CLOSE_PERP_SHORT, result.orderId);
-    this.events.push({
-      timestamp: new Date().toISOString(),
-      eventType: EventType.PERP_CLOSE,
-      amount: this.state.perpSize,
-      asset: 'SOL',
-      orderId: result.orderId,
-      metadata: {
-        action: 'dn_exit_close_short',
-        pnl: result.pnl,
-        entryPrice: this.state.perpEntryPrice,
-      },
-    });
-    log.info({ pnl: result.pnl }, 'Closed PERP short');
-    this.state.perpSize = 0;
-    this.state.perpEntryPrice = 0;
-    return true;
-  }
+    // Skip already-completed legs (for resume after partial failure)
+    const closePromise =
+      this.state.perpSize === 0
+        ? Promise.resolve(null)
+        : this.connectors.closePerpShort();
 
-  private async stepSwapDawnSolToSol(): Promise<boolean> {
-    const result = await this.connectors.swapDawnSolToSol(
-      this.state.dawnsolAmount,
-    );
-    this.state.solAmount = result.solAmount;
-    this.recordTx(DnStep.SWAP_DAWNSOL_SOL, result.txSig);
-    this.events.push({
-      timestamp: new Date().toISOString(),
-      eventType: EventType.SWAP,
-      amount: result.solAmount,
-      asset: 'SOL',
-      txHash: result.txSig,
-      metadata: {
-        action: 'dn_exit_swap_dawnsol_sol',
-        dawnsolSpent: this.state.dawnsolAmount,
-        solReceived: result.solAmount,
-      },
-    });
-    log.info(
-      { dawnsolSpent: this.state.dawnsolAmount, solReceived: result.solAmount },
-      'Swapped dawnSOL -> SOL',
-    );
-    this.state.dawnsolAmount = 0;
+    const swapPromise =
+      this.state.dawnsolAmount === 0
+        ? Promise.resolve(null)
+        : this.connectors.swapDawnSolToSol(this.state.dawnsolAmount);
+
+    const [closeSettled, swapSettled] = await Promise.allSettled([
+      closePromise,
+      swapPromise,
+    ]);
+
+    // Record close short if fulfilled
+    if (closeSettled.status === 'fulfilled' && closeSettled.value !== null) {
+      const closeResult = closeSettled.value;
+      this.recordTx(DnStep.CLOSE_BOTH_LEGS, closeResult.orderId);
+      this.events.push({
+        timestamp: new Date().toISOString(),
+        eventType: EventType.PERP_CLOSE,
+        amount: this.state.perpSize,
+        asset: 'SOL',
+        orderId: closeResult.orderId,
+        metadata: {
+          action: 'dn_exit_close_short',
+          pnl: closeResult.pnl,
+          entryPrice: this.state.perpEntryPrice,
+        },
+      });
+      log.info({ pnl: closeResult.pnl }, 'Closed PERP short');
+      this.state.perpSize = 0;
+      this.state.perpEntryPrice = 0;
+    }
+
+    // Record dawnSOL → SOL swap if fulfilled
+    if (swapSettled.status === 'fulfilled' && swapSettled.value !== null) {
+      const swapResult = swapSettled.value;
+      this.state.solAmount = swapResult.solAmount;
+      this.recordTx(DnStep.CLOSE_BOTH_LEGS, swapResult.txSig);
+      this.events.push({
+        timestamp: new Date().toISOString(),
+        eventType: EventType.SWAP,
+        amount: swapResult.solAmount,
+        asset: 'SOL',
+        txHash: swapResult.txSig,
+        metadata: {
+          action: 'dn_exit_swap_dawnsol_sol',
+          dawnsolSpent: this.state.dawnsolAmount,
+          solReceived: swapResult.solAmount,
+        },
+      });
+      log.info(
+        { dawnsolSpent: this.state.dawnsolAmount, solReceived: swapResult.solAmount },
+        'Swapped dawnSOL -> SOL',
+      );
+      this.state.dawnsolAmount = 0;
+    }
+
+    // Check for failures and throw with details
+    const errors: string[] = [];
+    if (closeSettled.status === 'rejected') {
+      errors.push(`close: ${closeSettled.reason instanceof Error ? closeSettled.reason.message : String(closeSettled.reason)}`);
+    }
+    if (swapSettled.status === 'rejected') {
+      errors.push(`swap: ${swapSettled.reason instanceof Error ? swapSettled.reason.message : String(swapSettled.reason)}`);
+    }
+
+    if (errors.length > 0) {
+      throw new Error(errors.join('; '));
+    }
+
     return true;
   }
 
@@ -550,6 +574,43 @@ export class DnExecutor {
     return true;
   }
 
+  private async stepTransferSpotToFutures(): Promise<boolean> {
+    await this.connectors.transferSpotToFutures(this.state.marginAmount);
+    this.events.push({
+      timestamp: new Date().toISOString(),
+      eventType: EventType.TRANSFER,
+      amount: this.state.marginAmount,
+      asset: 'USDC',
+      metadata: { action: 'dn_entry_transfer_spot_to_futures' },
+    });
+    log.info(
+      { amount: this.state.marginAmount },
+      'Transferred USDC from Spot to Futures',
+    );
+    return true;
+  }
+
+  private async stepTransferFuturesToSpot(): Promise<boolean> {
+    const balance = await this.connectors.getFuturesUsdcBalance();
+    if (balance <= 0) {
+      log.info('No USDC balance in Futures wallet, skipping transfer');
+      return true;
+    }
+    await this.connectors.transferFuturesToSpot(balance);
+    this.events.push({
+      timestamp: new Date().toISOString(),
+      eventType: EventType.TRANSFER,
+      amount: balance,
+      asset: 'USDC',
+      metadata: { action: 'dn_exit_transfer_futures_to_spot' },
+    });
+    log.info(
+      { amount: balance },
+      'Transferred USDC from Futures to Spot',
+    );
+    return true;
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────
 
   private transition(step: DnStep): void {
@@ -580,13 +641,10 @@ export class DnExecutor {
   private isEntryStep(step: DnStep): boolean {
     const entrySteps = new Set([
       DnStep.WITHDRAW_LENDING,
-      DnStep.TRANSFER_TO_BINANCE,
+      DnStep.TRANSFER_MARGIN_TO_BINANCE,
       DnStep.WAIT_BINANCE_DEPOSIT,
-      DnStep.BUY_SOL_BINANCE,
-      DnStep.WITHDRAW_SOL_BINANCE,
-      DnStep.WAIT_SOL_WITHDRAWAL,
-      DnStep.SWAP_SOL_DAWNSOL,
-      DnStep.OPEN_PERP_SHORT,
+      DnStep.TRANSFER_SPOT_TO_FUTURES,
+      DnStep.OPEN_BOTH_LEGS,
     ]);
     return entrySteps.has(step);
   }

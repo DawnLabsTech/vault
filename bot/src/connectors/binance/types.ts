@@ -86,6 +86,14 @@ export interface BinancePremiumIndex {
   time: number;
 }
 
+export interface BinanceDepositAddress {
+  address: string;
+  coin: string;
+  tag: string;
+  url: string;
+  isDefault: number; // 1 = default
+}
+
 export interface BinanceWithdrawResult {
   id: string;
 }
@@ -142,6 +150,10 @@ export interface WsMarkPriceUpdate {
   P: string; // estimated settle price
   r: string; // funding rate
   T: number; // next funding time
+}
+
+export interface BinanceTransferResult {
+  tranId: number;
 }
 
 export interface BinanceApiError {

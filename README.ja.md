@@ -33,7 +33,7 @@ vault/
 オンチェーン＋オフチェーンのハイブリッド構成:
 
 - **ベース層:** Kamino / Drift / Jupiter LendでUSDCレンディング（APY最高のプールを自動選択）
-- **攻め層:** デルタニュートラル — USDC → SOL → dawnSOL（オンチェーン、Jupiter）+ SOL-PERPショート（Binance Futures）
+- **攻め層:** デルタニュートラル — USDC → dawnSOL（オンチェーン、Jupiter）+ SOL-PERPショート（Binance Futures）を並列実行
   - dawnSOLのステーキング報酬〜7%がロングレグに自動上乗せ
   - レバレッジなし（1x固定、perp側の清算リスク実質ゼロ）
   - SOLファンディングレートが十分プラスの時のみ稼働
@@ -60,9 +60,26 @@ vault/
 | FR Monitor | Binance SOL-PERP FR取得・閾値判定 |
 | State Machine | BASE_ONLY ⇔ BASE+DN の状態遷移制御 |
 | Lending Aggregator | Kamino / Drift / Jupiter Lend間のAPY比較・最適プール自動選択 |
-| dawnSOL Swap | USDC ⇔ SOL ⇔ dawnSOLスワップ（Jupiter API） |
+| dawnSOL Swap | USDC ⇔ dawnSOLスワップ（Jupiter API） |
 | Binance Executor | SOL-PERPショート開閉・マージン管理 |
 | Risk Manager | FR急変・異常検知・即時撤退判断 |
+
+## 調査メモ
+
+### Hyperliquid SOL Perp（2026-03 調査、見送り）
+
+DN戦略のショートレグとしてHyperliquid SOL Perpの統合を検討。90日分のFRデータをBinanceと比較した結果、閾値未達のため見送り。
+
+| 期間 | Hyperliquid | Binance | 差分 |
+|---|---|---|---|
+| 7日平均 | -6.25% | -4.97% | -1.28% |
+| 30日平均 | -9.47% | -6.96% | -2.51% |
+| 90日平均 | -3.20% | -3.21% | +0.01% |
+
+- 判定基準: 年率5%以上 → Go / 未満 → 見送り
+- 結果: **NO-GO**（両取引所ともマイナスFR環境、Hyperliquidに優位性なし）
+- 検証スクリプト: `bot/scripts/compare-funding-rates.ts`
+- 市場環境が変われば再検討の余地あり
 
 ## 開発
 

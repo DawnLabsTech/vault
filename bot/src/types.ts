@@ -107,6 +107,8 @@ export interface LendingProtocol {
 }
 
 // Config
+export type PerpExchange = 'binance' | 'drift';
+
 export interface VaultConfig {
   general: {
     dryRun: boolean;
@@ -116,10 +118,17 @@ export interface VaultConfig {
     lendingRebalanceIntervalMs: number;
     dailyPnlTimeUtc: string; // "00:00"
   };
+  perp: {
+    exchange: PerpExchange;
+    symbol: string;       // 'SOLUSDC' for Binance, 'SOL-PERP' for Drift
+    leverage: number;
+    swapSlippageBps: number;
+  };
   binance: {
     symbol: string;
     leverage: number;
     testnet: boolean;
+    swapSlippageBps: number;
   };
   solana: {
     network: 'mainnet-beta' | 'devnet';

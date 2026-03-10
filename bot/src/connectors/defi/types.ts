@@ -6,6 +6,7 @@ export interface SwapQuote {
   priceImpactPct: number;
   slippageBps: number;
   routePlan: string;
+  rawQuoteResponse: unknown;
 }
 
 export interface SwapResult {

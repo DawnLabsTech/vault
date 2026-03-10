@@ -35,6 +35,7 @@ const SCHEMA_SQL = `
     dawnsol_balance REAL,
     dawnsol_usdc_value REAL,
     binance_usdc_balance REAL,
+    buffer_usdc_balance REAL,
     binance_perp_unrealized_pnl REAL,
     binance_perp_size REAL,
     state TEXT NOT NULL,
@@ -98,6 +99,13 @@ export function initDb(): Database.Database {
   database.pragma('foreign_keys = ON');
 
   database.exec(SCHEMA_SQL);
+
+  // Migrate: add buffer_usdc_balance column for existing databases
+  try {
+    database.exec('ALTER TABLE snapshots ADD COLUMN buffer_usdc_balance REAL DEFAULT 0');
+  } catch {
+    // Column already exists — ignore
+  }
 
   log.info({ path: DB_PATH }, 'Database initialized');
   return database;

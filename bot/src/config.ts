@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { watch } from 'chokidar';
-import type { VaultConfig } from './types.js';
+import type { PerpExchange, VaultConfig } from './types.js';
 
 const CONFIG_DIR = join(process.cwd(), 'config');
 const CONFIG_PATH = join(CONFIG_DIR, 'default.json');
@@ -17,10 +17,17 @@ const DEFAULT_CONFIG: VaultConfig = {
     lendingRebalanceIntervalMs: 21_600_000, // 6h
     dailyPnlTimeUtc: '00:00',
   },
+  perp: {
+    exchange: 'binance',
+    symbol: 'SOLUSDC',
+    leverage: 1,
+    swapSlippageBps: 50,
+  },
   binance: {
-    symbol: 'SOLUSDT',
+    symbol: 'SOLUSDC',
     leverage: 1,
     testnet: true,
+    swapSlippageBps: 50,
   },
   solana: {
     network: 'devnet',
@@ -81,12 +88,29 @@ class ConfigManager extends EventEmitter {
       }
     }
 
+    // Apply environment variable overrides
+    config = this.applyEnvOverrides(config);
+
+    return config;
+  }
+
+  private applyEnvOverrides(config: VaultConfig): VaultConfig {
+    if (process.env.PERP_EXCHANGE) {
+      const exchange = process.env.PERP_EXCHANGE.toLowerCase() as PerpExchange;
+      if (exchange === 'binance' || exchange === 'drift') {
+        config.perp.exchange = exchange;
+        if (exchange === 'drift') {
+          config.perp.symbol = 'SOL-PERP';
+        }
+      }
+    }
     return config;
   }
 
   private mergeConfig(defaults: VaultConfig, overrides: Partial<VaultConfig>): VaultConfig {
     return {
       general: { ...defaults.general, ...overrides.general },
+      perp: { ...defaults.perp, ...overrides.perp },
       binance: { ...defaults.binance, ...overrides.binance },
       solana: { ...defaults.solana, ...overrides.solana },
       thresholds: { ...defaults.thresholds, ...overrides.thresholds },

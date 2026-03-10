@@ -5,7 +5,9 @@ import type {
   BinanceAccountInfo,
   BinanceApiError,
   BinanceBalance,
+  BinanceDepositAddress,
   BinanceDepositRecord,
+  BinanceTransferResult,
   BinanceFundingRate,
   BinanceLeverageResult,
   BinanceOrder,
@@ -135,6 +137,18 @@ export class BinanceRestClient {
 
   // ─── Spot / SAPI (Withdraw & Deposit) ──────────────────
 
+  async getDepositAddress(coin: string, network: string): Promise<BinanceDepositAddress> {
+    return withRetry(
+      () => this.signedRequest<BinanceDepositAddress>(
+        'GET',
+        '/sapi/v1/capital/deposit/address',
+        { coin, network },
+        'spot',
+      ),
+      'getDepositAddress',
+    );
+  }
+
   async withdraw(asset: string, address: string, amount: string, network: string): Promise<BinanceWithdrawResult> {
     log.info({ asset, address: `${address.slice(0, 8)}...`, amount, network }, 'Submitting withdrawal');
 
@@ -146,6 +160,51 @@ export class BinanceRestClient {
         'spot',
       ),
       'withdraw',
+      { maxAttempts: 2 },
+    );
+  }
+
+  async transferInternal(type: string, asset: string, amount: string): Promise<BinanceTransferResult> {
+    log.info({ type, asset, amount }, 'Internal transfer');
+
+    return withRetry(
+      () => this.signedRequest<BinanceTransferResult>(
+        'POST',
+        '/sapi/v1/asset/transfer',
+        { type, asset, amount },
+        'spot',
+      ),
+      'transferInternal',
+      { maxAttempts: 2 },
+    );
+  }
+
+  async transferSpotToFutures(asset: string, amount: string): Promise<BinanceTransferResult> {
+    log.info({ asset, amount }, 'Transferring from Spot to USD-M Futures');
+
+    return withRetry(
+      () => this.signedRequest<BinanceTransferResult>(
+        'POST',
+        '/sapi/v1/asset/transfer',
+        { type: 'MAIN_UMFUTURE', asset, amount },
+        'spot',
+      ),
+      'transferSpotToFutures',
+      { maxAttempts: 2 },
+    );
+  }
+
+  async transferFuturesToSpot(asset: string, amount: string): Promise<BinanceTransferResult> {
+    log.info({ asset, amount }, 'Transferring from USD-M Futures to Spot');
+
+    return withRetry(
+      () => this.signedRequest<BinanceTransferResult>(
+        'POST',
+        '/sapi/v1/asset/transfer',
+        { type: 'UMFUTURE_MAIN', asset, amount },
+        'spot',
+      ),
+      'transferFuturesToSpot',
       { maxAttempts: 2 },
     );
   }

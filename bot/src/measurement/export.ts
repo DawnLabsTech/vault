@@ -63,8 +63,8 @@ export function exportSnapshotsCsv(from: string, to: string): string {
   const headers = [
     'timestamp', 'total_nav_usdc', 'lending_balance', 'lending_breakdown',
     'dawnsol_balance', 'dawnsol_usdc_value', 'binance_usdc_balance',
-    'binance_perp_unrealized_pnl', 'binance_perp_size', 'state',
-    'sol_price', 'dawnsol_price',
+    'buffer_usdc_balance', 'binance_perp_unrealized_pnl', 'binance_perp_size',
+    'state', 'sol_price', 'dawnsol_price',
   ];
 
   const lines = [headers.join(',')];
@@ -73,7 +73,7 @@ export function exportSnapshotsCsv(from: string, to: string): string {
       s.timestamp, s.totalNavUsdc, s.lendingBalance,
       JSON.stringify(s.lendingBreakdown),
       s.dawnsolBalance, s.dawnsolUsdcValue, s.binanceUsdcBalance,
-      s.binancePerpUnrealizedPnl, s.binancePerpSize, s.state,
+      s.bufferUsdcBalance, s.binancePerpUnrealizedPnl, s.binancePerpSize, s.state,
       s.solPrice, s.dawnsolPrice,
     ]));
   }
