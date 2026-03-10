@@ -4,7 +4,8 @@ import { round } from '../utils/math.js';
 
 const log = createChildLogger('guardrails');
 
-const KILL_SWITCH_PATH = '/tmp/vault-kill';
+export const KILL_SWITCH_PATH =
+  process.env.VAULT_KILL_SWITCH_PATH ?? '/tmp/vault-kill';
 
 // ── Result types ───────────────────────────────────────────────────────────
 
