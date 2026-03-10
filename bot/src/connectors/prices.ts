@@ -7,7 +7,7 @@ const log = createChildLogger('prices');
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const DAWNSOL_MINT = 'dawnsLuqPDY2Erch6ogeaHpvBdBaAZKBMqfbRHqjmqN';
 
-const JUPITER_PRICE_API = 'https://api.jup.ag/price/v2';
+const JUPITER_PRICE_API = 'https://api.jup.ag/price/v3';
 
 /** Cache TTL in milliseconds */
 const CACHE_TTL_MS = 60_000;
@@ -17,23 +17,20 @@ interface PriceCache {
   fetchedAt: number;
 }
 
-interface JupiterPriceResponse {
-  data: Record<
-    string,
-    {
-      id: string;
-      type: string;
-      price: string;
-    } | null
-  >;
-  timeTaken: number;
+interface JupiterV3PriceEntry {
+  usdPrice: number;
+  blockId: number;
+  decimals: number;
+  priceChange24h: number;
 }
+
+type JupiterPriceResponse = Record<string, JupiterV3PriceEntry | null>;
 
 let priceCache: PriceCache | null = null;
 let lastKnownPrices: PriceData | null = null;
 
 /**
- * Fetch prices from Jupiter Price API v2.
+ * Fetch prices from Jupiter Price API v3.
  * Fetches both SOL and dawnSOL prices in a single request.
  */
 async function fetchPricesFromJupiter(): Promise<PriceData> {
@@ -58,27 +55,22 @@ async function fetchPricesFromJupiter(): Promise<PriceData> {
 
   const json = (await response.json()) as JupiterPriceResponse;
 
-  const solEntry = json.data[SOL_MINT];
-  const dawnsolEntry = json.data[DAWNSOL_MINT];
+  const solEntry = json[SOL_MINT];
+  const dawnsolEntry = json[DAWNSOL_MINT];
 
-  if (!solEntry || !solEntry.price) {
+  if (!solEntry || !solEntry.usdPrice) {
     throw new Error('SOL price not available from Jupiter');
   }
 
-  const solPrice = parseFloat(solEntry.price);
+  const solPrice = solEntry.usdPrice;
   if (isNaN(solPrice) || solPrice <= 0) {
-    throw new Error(`Invalid SOL price from Jupiter: ${solEntry.price}`);
+    throw new Error(`Invalid SOL price from Jupiter: ${solPrice}`);
   }
 
   // dawnSOL might not always be available
   let dawnsolPrice: number;
-  if (dawnsolEntry && dawnsolEntry.price) {
-    dawnsolPrice = parseFloat(dawnsolEntry.price);
-    if (isNaN(dawnsolPrice) || dawnsolPrice <= 0) {
-      log.warn({ raw: dawnsolEntry.price }, 'Invalid dawnSOL price, falling back');
-      // Fallback: estimate dawnSOL as ~1.05x SOL (typical LST premium)
-      dawnsolPrice = solPrice * 1.05;
-    }
+  if (dawnsolEntry && dawnsolEntry.usdPrice > 0) {
+    dawnsolPrice = dawnsolEntry.usdPrice;
   } else {
     log.warn('dawnSOL price not available from Jupiter, estimating from SOL price');
     dawnsolPrice = solPrice * 1.05;
