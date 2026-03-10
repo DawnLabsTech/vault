@@ -24,12 +24,6 @@ export function BotStatusCard() {
           {data.startedAt && (
             <MetricRow label="Started" value={formatDateTime(data.startedAt)} />
           )}
-          {data.snapshot && (
-            <>
-              <MetricRow label="SOL Price" value={`$${data.snapshot.solPrice.toFixed(2)}`} />
-              <MetricRow label="dawnSOL Price" value={`$${data.snapshot.dawnsolPrice.toFixed(2)}`} />
-            </>
-          )}
         </div>
       )}
     </div>
