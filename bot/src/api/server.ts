@@ -18,6 +18,14 @@ export class ApiServer {
 
   start(port: number = 3000): void {
     this.server = createServer(async (req, res) => {
+      // Health check — no auth required (used by Docker healthcheck)
+      const healthUrl = new URL(req.url || '/', `http://${req.headers.host}`);
+      if (healthUrl.pathname === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok' }));
+        return;
+      }
+
       // Auth check — require token in production
       const authHeader = req.headers.authorization;
       const expectedAuth = process.env.API_AUTH_TOKEN;

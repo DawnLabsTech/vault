@@ -186,6 +186,8 @@ export class Orchestrator {
     const config = getConfig();
     const thresholds = config.thresholds;
 
+    const snapshot = await this.buildSnapshot();
+
     const signals: StateSignals = {
       currentState: this.botState,
       avgFrAnnualized: this.deps.frMonitor.getAverageAnnualized(thresholds.frEntryConfirmationDays),
@@ -194,6 +196,7 @@ export class Orchestrator {
       daysBelowExit: this.deps.frMonitor.getDaysBelowThreshold(thresholds.frExitAnnualized),
       riskApproved: true, // Will be overridden by risk manager
       dnOperationInProgress: this.dnOperationInProgress,
+      totalNavUsdc: snapshot.totalNavUsdc,
     };
 
     const result = evaluateState(signals, config);
@@ -253,8 +256,8 @@ export class Orchestrator {
       case ActionType.DN_ENTRY: {
         this.dnOperationInProgress = true;
         try {
-          const amount = (action.params.amount as number) || 0;
-          await this.deps.dnExecutor.startEntry(amount);
+          const usdcAmount = (action.params.usdcAmount as number) || 0;
+          await this.deps.dnExecutor.startEntry(usdcAmount);
         } catch (err) {
           log.error({ error: (err as Error).message }, 'DN entry failed');
           await sendAlert(`DN entry failed: ${(err as Error).message}`, 'critical');

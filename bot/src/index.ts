@@ -5,35 +5,23 @@ import { configManager, getConfig } from './config.js';
 import { initDb, closeDb, getDb } from './measurement/db.js';
 import { FrMonitor } from './core/fr-monitor.js';
 import { BaseAllocator } from './strategies/base-allocator.js';
-import { DnExecutor, type DnConnectors } from './strategies/dn-executor.js';
+import { DnExecutor } from './strategies/dn-executor.js';
 import { RiskManager } from './risk/risk-manager.js';
 import { BinanceRestClient } from './connectors/binance/rest.js';
 import { BinanceWsClient } from './connectors/binance/ws.js';
 import { Orchestrator } from './core/orchestrator.js';
 import { sendAlert } from './utils/notify.js';
+import { ApiServer } from './api/server.js';
 import { loadWalletFromEnv } from './connectors/solana/wallet.js';
 import { KaminoLending } from './connectors/defi/kamino.js';
 import { DriftLending } from './connectors/defi/drift.js';
 import { JupiterLending } from './connectors/defi/jupiter-lend.js';
+import { JupiterSwap } from './connectors/defi/jupiter-swap.js';
+import { SolanaTransactionSender } from './connectors/solana/tx-sender.js';
+import { buildDnConnectors } from './connectors/dn-connectors.js';
 import type { LendingProtocol } from './types.js';
 
 const log = createChildLogger('main');
-
-// Stub connectors for DN executor (will be wired to real implementations later)
-const stubDnConnectors: DnConnectors = {
-  async withdrawFromLending(_amount) { throw new Error('Not implemented'); },
-  async transferUsdcToBinance(_amount) { throw new Error('Not implemented'); },
-  async waitForBinanceDeposit(_amount, _timeout) { throw new Error('Not implemented'); },
-  async buySolOnBinance(_amount) { throw new Error('Not implemented'); },
-  async withdrawSolFromBinance(_amount, _addr) { throw new Error('Not implemented'); },
-  async waitForSolWithdrawal(_id, _timeout) { throw new Error('Not implemented'); },
-  async swapSolToDawnSol(_amount) { throw new Error('Not implemented'); },
-  async openPerpShort(_amount) { throw new Error('Not implemented'); },
-  async closePerpShort() { throw new Error('Not implemented'); },
-  async swapDawnSolToSol(_amount) { throw new Error('Not implemented'); },
-  async swapSolToUsdc(_amount) { throw new Error('Not implemented'); },
-  async depositToLending(_amount) { throw new Error('Not implemented'); },
-};
 
 async function main(): Promise<void> {
   log.info('Vault Strategy Bot starting...');
@@ -105,11 +93,34 @@ async function main(): Promise<void> {
     }
   }
 
+  // Initialize Jupiter Swap and Solana TX sender
+  const jupiterSwap = new JupiterSwap(walletAddress);
+  let txSender: SolanaTransactionSender | null = null;
+  try {
+    const wallet = loadWalletFromEnv();
+    if (rpcUrl) {
+      txSender = new SolanaTransactionSender(rpcUrl, wallet.secretKey);
+    }
+  } catch {
+    log.warn('TxSender not available — DN connectors will only work in dryRun mode');
+  }
+
   // Initialize monitors and strategies
   const db = getDb();
   const frMonitor = new FrMonitor(db);
   const baseAllocator = new BaseAllocator(lendingAdapters, config);
-  const dnExecutor = new DnExecutor(config, stubDnConnectors, walletAddress);
+
+  // Build real DN connectors (dryRun guard is inside each method)
+  const dnConnectors = buildDnConnectors({
+    binanceRest,
+    lendingAdapters,
+    baseAllocator,
+    jupiterSwap,
+    txSender: txSender!,
+    walletAddress,
+    config,
+  });
+  const dnExecutor = new DnExecutor(config, dnConnectors, walletAddress);
   const riskManager = new RiskManager(config);
 
   // Create orchestrator
@@ -143,6 +154,11 @@ async function main(): Promise<void> {
     log.error({ reason }, 'Unhandled rejection');
     await sendAlert(`Unhandled rejection: ${reason}`, 'critical');
   });
+
+  // Start API server
+  const apiServer = new ApiServer();
+  apiServer.setFrMonitor(frMonitor);
+  apiServer.start(3000);
 
   // Start the bot
   await orchestrator.start();

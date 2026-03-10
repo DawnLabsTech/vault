@@ -40,7 +40,7 @@ export class JupiterLending implements LendingProtocol {
       'Content-Type': 'application/json',
     };
     if (this.apiKey) {
-      headers['Authorization'] = `Bearer ${this.apiKey}`;
+      headers['x-api-key'] = this.apiKey;
     }
     return headers;
   }
