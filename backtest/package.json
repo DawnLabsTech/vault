@@ -1,0 +1,22 @@
+{
+  "name": "vault-backtest",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "backtest": "tsx src/cli.ts",
+    "test": "vitest",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "big.js": "^6.2.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/big.js": "^6.2.2",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

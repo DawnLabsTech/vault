@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-vault-bg: #0a0a0a;
+  --color-vault-card: #1a1a1a;
+  --color-vault-border: #333333;
+  --color-vault-accent: #00ff88;
+  --color-vault-accent-dim: rgba(0, 255, 136, 0.2);
+  --color-vault-negative: #ff4444;
+  --color-vault-warning: #ffaa00;
+  --color-vault-muted: #888888;
+  --color-vault-text: #e0e0e0;
+  --color-vault-text-bright: #ffffff;
+  --font-mono: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+}
+
+body {
+  background: var(--color-vault-bg);
+  color: var(--color-vault-text);
+  font-family: var(--font-mono);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-vault-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-vault-border);
+  border-radius: 3px;
+}
+
+/* Skeleton animation */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--color-vault-card) 25%, #252525 50%, var(--color-vault-card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
