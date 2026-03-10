@@ -66,12 +66,14 @@ export function PnlChart() {
   }, []);
 
   useEffect(() => {
-    if (!seriesRef.current || !data?.length) return;
+    if (!seriesRef.current) return;
 
-    const chartData = data.map((d) => ({
-      time: d.date as string,
-      value: d.cumulativeReturn * 100,
-    }));
+    const chartData = data?.length
+      ? data.map((d) => ({
+          time: d.date as string,
+          value: d.cumulativeReturn * 100,
+        }))
+      : [{ time: new Date().toISOString().split('T')[0] as string, value: 0 }];
 
     seriesRef.current.setData(chartData);
     chartRef.current?.timeScale().fitContent();
