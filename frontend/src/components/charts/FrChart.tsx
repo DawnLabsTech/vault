@@ -24,8 +24,9 @@ export function FrChart() {
   const [showBinance, setShowBinance] = useState(true);
   const [showDrift, setShowDrift] = useState(true);
 
-  const { data: binanceData, isLoading: binanceLoading } = useFrHistory(3, 'binance');
-  const { data: driftData, isLoading: driftLoading } = useFrHistory(3, 'drift');
+  // Drift API returns ~30 days; match Binance to same period
+  const { data: binanceData, isLoading: binanceLoading } = useFrHistory(1, 'binance');
+  const { data: driftData, isLoading: driftLoading } = useFrHistory(1, 'drift');
 
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -163,7 +164,7 @@ export function FrChart() {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
           <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
-            Funding Rate (Annualized %) — 3M
+            Funding Rate (Annualized %) — 1M
           </h3>
           {/* Exchange toggles */}
           <div className="flex gap-1">
