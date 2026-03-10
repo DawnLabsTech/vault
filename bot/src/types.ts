@@ -55,6 +55,7 @@ export interface PortfolioSnapshot {
   lendingBreakdown: Record<string, number>; // protocol -> balance
   dawnsolBalance: number;
   dawnsolUsdcValue: number;
+  bufferUsdcBalance: number;
   binanceUsdcBalance: number;
   binancePerpUnrealizedPnl: number;
   binancePerpSize: number;

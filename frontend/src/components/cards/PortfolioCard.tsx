@@ -21,6 +21,7 @@ export function PortfolioCard() {
             <span className="text-lg font-bold text-vault-text-bright">{formatUsd(s.totalNavUsdc)}</span>
           </div>
           <MetricRow label="Lending" value={formatUsd(s.lendingBalance)} />
+          <MetricRow label="Buffer USDC" value={formatUsd(s.bufferUsdcBalance)} />
           {/* DN Position group: collateral + spot + perp hedge */}
           <div className="mt-2 pt-2 border-t border-vault-border/50">
             <span className="text-vault-muted text-xs uppercase tracking-wider">DN Position</span>

@@ -341,6 +341,18 @@ export class Orchestrator {
       lendingTotal += balance;
     }
 
+    // Get wallet USDC buffer balance
+    let bufferUsdcBalance = 0;
+    try {
+      const rawBalance = await this.deps.solanaRpc.getTokenBalance(
+        this.deps.walletAddress,
+        USDC_MINT,
+      );
+      bufferUsdcBalance = rawBalance / 1e6;
+    } catch (err) {
+      log.warn({ error: (err as Error).message }, 'Failed to get buffer USDC for snapshot');
+    }
+
     // Get Binance balances
     let binanceUsdcBalance = 0;
     let binancePerpUnrealizedPnl = 0;
@@ -367,13 +379,14 @@ export class Orchestrator {
     const dawnsolBalance = dnState.dawnsolAmount;
     const dawnsolUsdcValue = dawnsolBalance * prices.dawnsol;
 
-    const totalNavUsdc = lendingTotal + binanceUsdcBalance + dawnsolUsdcValue + binancePerpUnrealizedPnl;
+    const totalNavUsdc = lendingTotal + bufferUsdcBalance + binanceUsdcBalance + dawnsolUsdcValue + binancePerpUnrealizedPnl;
 
     return {
       timestamp: new Date().toISOString(),
       totalNavUsdc,
       lendingBalance: lendingTotal,
       lendingBreakdown,
+      bufferUsdcBalance,
       dawnsolBalance,
       dawnsolUsdcValue,
       binanceUsdcBalance,
