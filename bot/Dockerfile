@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install dependencies
 COPY package.json package-lock.json* ./
-RUN npm ci --production=false
+RUN npm install
 
 # Copy source
 COPY tsconfig.json ./
@@ -19,7 +19,7 @@ RUN npm run build
 RUN mkdir -p data
 
 # Remove dev dependencies
-RUN npm prune --production
+RUN npm prune --omit=dev
 
 EXPOSE 3000
 
