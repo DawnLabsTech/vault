@@ -5,7 +5,7 @@ import type { PriceData } from '../types.js';
 const log = createChildLogger('prices');
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const DAWNSOL_MINT = 'dawnsLuqPDY2Erch6ogeaHpvBdBaAZKBMqfbRHqjmqN';
+const DAWNSOL_MINT = 'DAwNdsyuXU8RornMj5B9QwHG4yoxHnPGHCXzG9ASUNJ2';
 
 const JUPITER_PRICE_API = 'https://api.jup.ag/price/v3';
 
