@@ -108,11 +108,20 @@ export function FrChart() {
   useEffect(() => {
     if (!seriesRef.current) return;
 
-    // Binance series
+    // Determine shared time range: clip to Drift's available range when both are shown
+    let clipStart = 0;
+    if (driftData?.length) {
+      const driftTimes = driftData.map((d) => d.fundingTime);
+      clipStart = Math.min(...driftTimes);
+    }
+
+    // Binance series — clip to Drift's time range so both align
     if (showBinance && binanceData?.length) {
-      const sorted = [...binanceData].sort((a, b) => a.fundingTime - b.fundingTime);
+      const clipped = binanceData
+        .filter((d) => d.fundingTime >= clipStart)
+        .sort((a, b) => a.fundingTime - b.fundingTime);
       seriesRef.current.binanceFr.setData(
-        sorted.map((d) => ({
+        clipped.map((d) => ({
           time: Math.floor(d.fundingTime / 1000) as any,
           value: toAnnualized(d.fundingRate, BINANCE_PERIODS_PER_DAY),
         }))
@@ -137,7 +146,7 @@ export function FrChart() {
     // Threshold lines
     const allTimes: number[] = [];
     if (showBinance && binanceData?.length) {
-      allTimes.push(...binanceData.map((d) => Math.floor(d.fundingTime / 1000)));
+      allTimes.push(...binanceData.filter((d) => d.fundingTime >= clipStart).map((d) => Math.floor(d.fundingTime / 1000)));
     }
     if (showDrift && driftData?.length) {
       allTimes.push(...driftData.map((d) => Math.floor(d.fundingTime / 1000)));
