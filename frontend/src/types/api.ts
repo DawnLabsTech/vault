@@ -75,6 +75,12 @@ export interface FundingRateData {
   markPrice?: number;
 }
 
+// /api/apys response
+export interface ApysResponse {
+  lending: { protocol: string; apy: number }[];
+  dawnsolApy: number;
+}
+
 // /api/events response item
 export interface LedgerEvent {
   timestamp: string;

@@ -164,6 +164,7 @@ async function main(): Promise<void> {
   // Start API server
   const apiServer = new ApiServer();
   apiServer.setFrMonitor(frMonitor);
+  apiServer.setBaseAllocator(baseAllocator);
   apiServer.start(3000);
 
   // Start the bot

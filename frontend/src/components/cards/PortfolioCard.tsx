@@ -1,13 +1,16 @@
 'use client';
 
 import { useStatus } from '@/hooks/useStatus';
+import { useApys } from '@/hooks/useApys';
 import { MetricRow } from '@/components/shared/MetricRow';
 import { CardSkeleton } from '@/components/shared/Skeleton';
 import { formatUsd, formatNumber, isPositive } from '@/lib/format';
 
 export function PortfolioCard() {
   const { data, isLoading } = useStatus();
+  const { data: apysData } = useApys();
   const s = data?.snapshot;
+  const dawnsolApy = apysData?.dawnsolApy;
 
   return (
     <div className="bg-vault-card border border-vault-border rounded-lg p-4">
@@ -27,7 +30,7 @@ export function PortfolioCard() {
             <span className="text-vault-muted text-xs uppercase tracking-wider">DN Position</span>
             <MetricRow label="Binance USDC" value={formatUsd(s.binanceUsdcBalance)} />
             <MetricRow
-              label="dawnSOL"
+              label={`dawnSOL${dawnsolApy !== undefined ? ` (${(dawnsolApy * 100).toFixed(2)}%)` : ''}`}
               value={`${formatNumber(s.dawnsolBalance)} (${formatUsd(s.dawnsolUsdcValue)})`}
             />
             {s.binancePerpSize !== 0 && (

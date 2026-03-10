@@ -4,16 +4,25 @@ import { getLatestSnapshot, getSnapshots } from '../measurement/snapshots.js';
 import { getDailyPnlRange, getPerformanceSummary } from '../measurement/pnl.js';
 import { getEvents } from '../measurement/events.js';
 import { getStateJson } from '../measurement/state-store.js';
+import { getDb } from '../measurement/db.js';
 import { FrMonitor } from '../core/fr-monitor.js';
+import type { BaseAllocator } from '../strategies/base-allocator.js';
 
 const log = createChildLogger('api');
+
+const DEFAULT_DAWNSOL_APY = 0.07; // 7% default until enough data
 
 export class ApiServer {
   private server: ReturnType<typeof createServer> | null = null;
   private frMonitor: FrMonitor | null = null;
+  private baseAllocator: BaseAllocator | null = null;
 
   setFrMonitor(monitor: FrMonitor): void {
     this.frMonitor = monitor;
+  }
+
+  setBaseAllocator(allocator: BaseAllocator): void {
+    this.baseAllocator = allocator;
   }
 
   start(port: number = 3000): void {
@@ -129,6 +138,12 @@ export class ApiServer {
         break;
       }
 
+      case '/api/apys': {
+        const apys = await this.getApys();
+        this.sendJson(res, apys);
+        break;
+      }
+
       case '/': {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(this.getDashboardHtml());
@@ -139,6 +154,40 @@ export class ApiServer {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Not found' }));
     }
+  }
+
+  private async getApys(): Promise<{ lending: { protocol: string; apy: number }[]; dawnsolApy: number }> {
+    // Lending APYs
+    const lending = this.baseAllocator
+      ? await this.baseAllocator.getApyRanking()
+      : [];
+
+    // dawnSOL APY: calculate from snapshot price ratio over 7 days
+    let dawnsolApy = DEFAULT_DAWNSOL_APY;
+    try {
+      const rows = getDb().prepare(`
+        SELECT sol_price, dawnsol_price, timestamp
+        FROM snapshots
+        WHERE sol_price > 0 AND dawnsol_price > 0
+        ORDER BY timestamp ASC
+      `).all() as { sol_price: number; dawnsol_price: number; timestamp: string }[];
+
+      if (rows.length >= 2) {
+        const oldest = rows[0]!;
+        const newest = rows[rows.length - 1]!;
+        const oldRatio = oldest.dawnsol_price / oldest.sol_price;
+        const newRatio = newest.dawnsol_price / newest.sol_price;
+        const daysDiff = (new Date(newest.timestamp).getTime() - new Date(oldest.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+        if (daysDiff >= 1 && oldRatio > 0) {
+          const periodReturn = (newRatio - oldRatio) / oldRatio;
+          dawnsolApy = periodReturn * (365 / daysDiff);
+        }
+      }
+    } catch (err) {
+      log.warn({ error: (err as Error).message }, 'Failed to calculate dawnSOL APY');
+    }
+
+    return { lending, dawnsolApy };
   }
 
   private sendJson(res: ServerResponse, data: unknown): void {
