@@ -56,6 +56,11 @@ const ENV_VARS: EnvVar[] = [
     required: false,
     sensitive: true,
   },
+  {
+    name: 'BINANCE_USDC_DEPOSIT_ADDRESS',
+    required: false,
+    validate: (v) => v.length >= 32 ? null : 'Address appears too short',
+  },
 ];
 
 /**

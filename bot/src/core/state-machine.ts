@@ -10,6 +10,7 @@ export interface StateSignals {
   riskApproved: boolean;
   forceState?: BotState;
   dnOperationInProgress: boolean;
+  totalNavUsdc: number;
 }
 
 export interface StateResult {
@@ -41,13 +42,19 @@ export function evaluateState(signals: StateSignals, config: VaultConfig): State
     frExitAnnualized,
     frExitConfirmationDays,
     frEmergencyAnnualized,
+    dnAllocationMax,
   } = config.thresholds;
+
+  const usdcAmount = Math.min(
+    signals.totalNavUsdc * dnAllocationMax,
+    config.risk.maxPositionCapUsd,
+  );
 
   // --- Manual override ---
   if (forceState !== undefined && forceState !== currentState) {
     const action: Action =
       forceState === BotState.BASE_DN
-        ? { type: ActionType.DN_ENTRY, params: { forced: true }, timestamp: now }
+        ? { type: ActionType.DN_ENTRY, params: { forced: true, usdcAmount }, timestamp: now }
         : { type: ActionType.DN_EXIT, params: { forced: true }, timestamp: now };
 
     return {
@@ -96,6 +103,7 @@ export function evaluateState(signals: StateSignals, config: VaultConfig): State
                 daysAboveEntry,
                 entryThreshold: frEntryAnnualized,
                 confirmationDays: frEntryConfirmationDays,
+                usdcAmount,
               },
               timestamp: now,
             },

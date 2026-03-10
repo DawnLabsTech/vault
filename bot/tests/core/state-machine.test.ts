@@ -52,6 +52,7 @@ function makeSignals(overrides: Partial<StateSignals> = {}): StateSignals {
     daysBelowExit: 0,
     riskApproved: true,
     dnOperationInProgress: false,
+    totalNavUsdc: 20_000,
     ...overrides,
   };
 }
@@ -319,5 +320,50 @@ describe('evaluateState', () => {
     // avgFR must be strictly greater than threshold
     expect(result.nextState).toBe(BotState.BASE_ONLY);
     expect(result.actions).toHaveLength(0);
+  });
+
+  // ─ usdcAmount in DN_ENTRY ──────────────────────────────
+
+  it('DN_ENTRY includes usdcAmount = min(nav * dnAllocationMax, maxPositionCapUsd)', () => {
+    // nav=20000, dnAllocationMax=0.7 → 14000, maxPositionCapUsd=10000 → min=10000
+    const signals = makeSignals({
+      avgFrAnnualized: 15,
+      daysAboveEntry: 3,
+      riskApproved: true,
+      totalNavUsdc: 20_000,
+    });
+
+    const result = evaluateState(signals, config);
+
+    expect(result.nextState).toBe(BotState.BASE_DN);
+    expect(result.actions[0]!.params).toHaveProperty('usdcAmount', 10_000);
+  });
+
+  it('DN_ENTRY usdcAmount capped by nav * dnAllocationMax when lower than maxPositionCapUsd', () => {
+    // nav=5000, dnAllocationMax=0.7 → 3500, maxPositionCapUsd=10000 → min=3500
+    const signals = makeSignals({
+      avgFrAnnualized: 15,
+      daysAboveEntry: 3,
+      riskApproved: true,
+      totalNavUsdc: 5_000,
+    });
+
+    const result = evaluateState(signals, config);
+
+    expect(result.nextState).toBe(BotState.BASE_DN);
+    expect(result.actions[0]!.params).toHaveProperty('usdcAmount', 3_500);
+  });
+
+  it('forced DN_ENTRY includes usdcAmount', () => {
+    const signals = makeSignals({
+      currentState: BotState.BASE_ONLY,
+      forceState: BotState.BASE_DN,
+      totalNavUsdc: 20_000,
+    });
+
+    const result = evaluateState(signals, config);
+
+    expect(result.actions[0]!.type).toBe(ActionType.DN_ENTRY);
+    expect(result.actions[0]!.params).toHaveProperty('usdcAmount', 10_000);
   });
 });
