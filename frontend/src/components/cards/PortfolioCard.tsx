@@ -2,6 +2,7 @@
 
 import { useStatus } from '@/hooks/useStatus';
 import { useApys } from '@/hooks/useApys';
+import { useActivePerpExchange } from '@/hooks/useFr';
 import { MetricRow } from '@/components/shared/MetricRow';
 import { CardSkeleton } from '@/components/shared/Skeleton';
 import { formatUsd, formatNumber, isPositive } from '@/lib/format';
@@ -9,6 +10,8 @@ import { formatUsd, formatNumber, isPositive } from '@/lib/format';
 export function PortfolioCard() {
   const { data, isLoading } = useStatus();
   const { data: apysData } = useApys();
+  const { data: configData } = useActivePerpExchange();
+  const perpExchange = configData?.perpExchange === 'drift' ? 'Drift' : 'Binance';
   const s = data?.snapshot;
   const dawnsolApy = apysData?.dawnsolApy;
 
@@ -28,7 +31,7 @@ export function PortfolioCard() {
           {/* DN Position group: collateral + spot + perp hedge */}
           <div className="mt-2 pt-2 border-t border-vault-border/50">
             <span className="text-vault-muted text-xs uppercase tracking-wider">DN Position</span>
-            <MetricRow label="Binance USDC" value={formatUsd(s.binanceUsdcBalance)} />
+            <MetricRow label={`${perpExchange} USDC`} value={formatUsd(s.binanceUsdcBalance)} />
             <MetricRow
               label={`dawnSOL${dawnsolApy !== undefined ? ` (${(dawnsolApy * 100).toFixed(2)}%)` : ''}`}
               value={`${formatNumber(s.dawnsolBalance)} (${formatUsd(s.dawnsolUsdcValue)})`}

@@ -1,11 +1,14 @@
 'use client';
 
 import { useStatus } from '@/hooks/useStatus';
+import { useActivePerpExchange } from '@/hooks/useFr';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { formatUsd } from '@/lib/format';
 
 export function AllocationChart() {
   const { data, isLoading } = useStatus();
+  const { data: configData } = useActivePerpExchange();
+  const perpExchange = configData?.perpExchange === 'drift' ? 'Drift' : 'Binance';
   const s = data?.snapshot;
 
   if (isLoading || !s) {
@@ -23,7 +26,7 @@ export function AllocationChart() {
   const segments = [
     { label: 'Lending', value: s.lendingBalance, color: '#00ff88' },
     { label: 'dawnSOL', value: s.dawnsolUsdcValue, color: '#00bbff' },
-    { label: 'Binance USDC', value: s.binanceUsdcBalance, color: '#ffaa00' },
+    { label: `${perpExchange} USDC`, value: s.binanceUsdcBalance, color: '#ffaa00' },
     { label: 'PERP (abs)', value: Math.abs(s.binancePerpSize), color: '#ff4444' },
   ].filter((seg) => seg.value > 0);
 
