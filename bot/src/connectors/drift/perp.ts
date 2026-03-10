@@ -230,6 +230,10 @@ export class DriftPerp {
         throw new Error('No open SOL-PERP position found on Drift');
       }
 
+      // クローズ前に unrealized PnL を記録
+      const preClosePnl = user.getUnrealizedPNL(true, SOL_PERP_MARKET_INDEX);
+      const pnl = preClosePnl.toNumber() / PRICE_PRECISION.toNumber();
+
       const posSize = position.baseAssetAmount.abs();
 
       // Close short = buy back (LONG direction)
@@ -241,9 +245,6 @@ export class DriftPerp {
           reduceOnly: true,
         }),
       );
-
-      // PnL from settled quote amounts (USDC, 6 decimals)
-      const pnl = position.quoteAssetAmount.toNumber() / PRICE_PRECISION.toNumber();
 
       log.info({ pnl, txSig }, 'Drift short closed');
       return { pnl, orderId: txSig };
@@ -266,7 +267,10 @@ export class DriftPerp {
       }
 
       const size = Math.abs(position.baseAssetAmount.toNumber()) / BASE_PRECISION.toNumber();
-      const unrealizedPnl = position.quoteAssetAmount.toNumber() / PRICE_PRECISION.toNumber();
+
+      // SDK の getUnrealizedPNL で正確な unrealized PnL を取得 (funding 込み)
+      const unrealizedPnlBN = user.getUnrealizedPNL(true, SOL_PERP_MARKET_INDEX);
+      const unrealizedPnl = unrealizedPnlBN.toNumber() / PRICE_PRECISION.toNumber();
 
       const quoteEntry = Math.abs(position.quoteEntryAmount.toNumber());
       const baseAmt = Math.abs(position.baseAssetAmount.toNumber());
@@ -279,31 +283,17 @@ export class DriftPerp {
     }
   }
 
-  /** Get USDC balance in Drift account via REST API */
+  /** Get USDC balance in Drift account via SDK */
   async getUsdcBalance(): Promise<number> {
-    return withRetry(async () => {
-      const res = await fetch(
-        `${DRIFT_API}/authority/${this.walletAddress}/accounts`,
-      );
-      if (!res.ok) {
-        throw new Error(`Drift API returned ${res.status}: ${res.statusText}`);
-      }
-      const data = (await res.json()) as any;
-      const accounts = Array.isArray(data) ? data : [data];
-      for (const account of accounts) {
-        const positions = account?.spotPositions ?? [];
-        const usdcPosition = positions.find(
-          (p: any) => p.marketIndex === 0,
-        );
-        if (usdcPosition?.scaledBalance) {
-          return usdcPosition.scaledBalance;
-        }
-      }
+    try {
+      const client = await this.ensureInitialized();
+      const user = client.getUser();
+      const tokenAmount = user.getTokenAmount(QUOTE_SPOT_MARKET_INDEX);
+      return tokenAmount.toNumber() / 1e6; // USDC = 6 decimals
+    } catch (err) {
+      log.error({ err }, 'Failed to get Drift USDC balance');
       return 0;
-    }, 'drift-getUsdcBalance').catch((err) => {
-      log.error({ err }, 'Failed to get Drift USDC balance after retries');
-      return 0;
-    });
+    }
   }
 
   /** Get SOL price from Drift oracle */
