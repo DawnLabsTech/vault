@@ -57,3 +57,12 @@ export function useFrHistory(months = 3, exchange: string = 'binance') {
   );
 }
 
+/** Returns the perp exchange currently configured on the bot. */
+export function useActivePerpExchange() {
+  return useSWR<{ perpExchange: string }>(
+    'config',
+    () => apiFetch<{ perpExchange: string }>('/config').catch(() => ({ perpExchange: 'binance' })),
+    { refreshInterval: 0, revalidateOnFocus: false, fallbackData: { perpExchange: 'binance' } }
+  );
+}
+

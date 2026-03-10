@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useFrHistory } from '@/hooks/useFr';
+import { useFrHistory, useActivePerpExchange } from '@/hooks/useFr';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { FR_ENTRY_THRESHOLD, FR_EXIT_THRESHOLD, FR_EMERGENCY_THRESHOLD } from '@/lib/constants';
 import { createChart, LineSeries, type IChartApi, type ISeriesApi, ColorType } from 'lightweight-charts';
@@ -15,6 +15,8 @@ const EXCHANGE_CONFIG: Record<Exchange, { label: string; periodsPerDay: number }
 
 export function FrChart() {
   const [exchange, setExchange] = useState<Exchange>('binance');
+  const { data: configData } = useActivePerpExchange();
+  const activeExchange = (configData?.perpExchange ?? 'binance') as Exchange;
   const { label, periodsPerDay } = EXCHANGE_CONFIG[exchange];
   const { data, isLoading } = useFrHistory(3, exchange);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -119,26 +121,28 @@ export function FrChart() {
             Funding Rate (Annualized %) — 3M
           </h3>
           <div className="flex bg-vault-bg rounded overflow-hidden border border-vault-border">
-            <button
-              onClick={() => setExchange('binance')}
-              className={`px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                exchange === 'binance'
-                  ? 'bg-vault-accent text-vault-bg'
-                  : 'text-vault-muted hover:text-vault-text'
-              }`}
-            >
-              Binance
-            </button>
-            <button
-              onClick={() => setExchange('drift')}
-              className={`px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                exchange === 'drift'
-                  ? 'bg-vault-accent text-vault-bg'
-                  : 'text-vault-muted hover:text-vault-text'
-              }`}
-            >
-              Drift
-            </button>
+            {(['binance', 'drift'] as const).map((ex) => (
+              <button
+                key={ex}
+                onClick={() => setExchange(ex)}
+                className={`px-2 py-0.5 text-[10px] font-medium transition-colors flex items-center gap-1 ${
+                  exchange === ex
+                    ? 'bg-vault-accent text-vault-bg'
+                    : 'text-vault-muted hover:text-vault-text'
+                }`}
+              >
+                {ex === 'binance' ? 'Binance' : 'Drift'}
+                {activeExchange === ex && (
+                  <span className={`text-[8px] px-1 rounded-sm font-bold ${
+                    exchange === ex
+                      ? 'bg-vault-bg/30 text-vault-bg'
+                      : 'bg-vault-accent/20 text-vault-accent'
+                  }`}>
+                    ACTIVE
+                  </span>
+                )}
+              </button>
+            ))}
           </div>
           <span className="text-vault-muted text-[10px]">{label}</span>
         </div>
