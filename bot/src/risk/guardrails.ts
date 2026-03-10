@@ -128,10 +128,10 @@ export function checkPositionDivergence(
  * Check if the kill switch file exists.
  * Touch /tmp/vault-kill to trigger an emergency shutdown.
  */
-export function checkKillSwitch(): boolean {
-  const killed = existsSync(KILL_SWITCH_PATH);
+export function checkKillSwitch(path: string = KILL_SWITCH_PATH): boolean {
+  const killed = existsSync(path);
   if (killed) {
-    log.error('Kill switch activated — /tmp/vault-kill exists');
+    log.error(`Kill switch activated — ${path} exists`);
   }
   return killed;
 }
