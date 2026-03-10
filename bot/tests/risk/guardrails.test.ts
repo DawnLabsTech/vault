@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import * as fs from 'fs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { writeFileSync, unlinkSync, existsSync, mkdtempSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import {
   checkDailyLossLimit,
   checkMaxPositionCap,
@@ -8,6 +10,20 @@ import {
   checkKillSwitch,
   runAllGuardrails,
 } from '../../src/risk/guardrails.js';
+
+// Use a temp dir for kill switch tests to avoid sandbox restrictions
+let killSwitchPath: string;
+
+function setupKillSwitchDir() {
+  const dir = mkdtempSync(join(tmpdir(), 'vault-test-'));
+  killSwitchPath = join(dir, 'vault-kill');
+}
+
+function cleanupKillSwitch() {
+  if (existsSync(killSwitchPath)) {
+    unlinkSync(killSwitchPath);
+  }
+}
 
 // ── checkDailyLossLimit ──────────────────────────────────
 
@@ -174,27 +190,24 @@ describe('checkPositionDivergence', () => {
 // ── checkKillSwitch ──────────────────────────────────────
 
 describe('checkKillSwitch', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  beforeEach(setupKillSwitchDir);
+  afterEach(cleanupKillSwitch);
 
   it('returns false when kill switch file does not exist', () => {
-    vi.spyOn(fs, 'existsSync').mockReturnValue(false);
-    expect(checkKillSwitch()).toBe(false);
+    expect(checkKillSwitch(killSwitchPath)).toBe(false);
   });
 
   it('returns true when kill switch file exists', () => {
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    expect(checkKillSwitch()).toBe(true);
+    writeFileSync(killSwitchPath, '');
+    expect(checkKillSwitch(killSwitchPath)).toBe(true);
   });
 });
 
 // ── runAllGuardrails ─────────────────────────────────────
 
 describe('runAllGuardrails', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  beforeEach(setupKillSwitchDir);
+  afterEach(cleanupKillSwitch);
 
   it('returns ok when all checks pass', () => {
     const result = runAllGuardrails({
@@ -204,12 +217,13 @@ describe('runAllGuardrails', () => {
       spotSol: 10,
       shortSol: 10,
       positionDivergenceThresholdPct: 3,
+      killSwitchPath,
     });
     expect(result.ok).toBe(true);
   });
 
   it('returns kill when kill switch is active', () => {
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    writeFileSync(killSwitchPath, '');
     const result = runAllGuardrails({
       currentNav: 10_000,
       dayStartNav: 10_000,
@@ -217,6 +231,7 @@ describe('runAllGuardrails', () => {
       spotSol: 10,
       shortSol: 10,
       positionDivergenceThresholdPct: 3,
+      killSwitchPath,
     });
     expect(result.ok).toBe(false);
     expect(result.action).toBe('kill');
@@ -230,6 +245,7 @@ describe('runAllGuardrails', () => {
       spotSol: 10,
       shortSol: 10,
       positionDivergenceThresholdPct: 3,
+      killSwitchPath,
     });
     expect(result.ok).toBe(false);
     expect(result.action).toBe('block');
@@ -243,13 +259,14 @@ describe('runAllGuardrails', () => {
       spotSol: 10,
       shortSol: 15,
       positionDivergenceThresholdPct: 3,
+      killSwitchPath,
     });
     expect(result.ok).toBe(false);
     expect(result.action).toBe('warn');
   });
 
   it('kill switch takes priority over other checks', () => {
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    writeFileSync(killSwitchPath, '');
     const result = runAllGuardrails({
       currentNav: 9_000, // also triggers loss limit
       dayStartNav: 10_000,
@@ -257,6 +274,7 @@ describe('runAllGuardrails', () => {
       spotSol: 10,
       shortSol: 20, // also triggers divergence
       positionDivergenceThresholdPct: 3,
+      killSwitchPath,
     });
     expect(result.action).toBe('kill');
   });
@@ -269,6 +287,7 @@ describe('runAllGuardrails', () => {
       spotSol: 10,
       shortSol: 20, // also triggers divergence
       positionDivergenceThresholdPct: 3,
+      killSwitchPath,
     });
     expect(result.action).toBe('block');
   });

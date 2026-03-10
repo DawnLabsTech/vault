@@ -146,9 +146,10 @@ export function runAllGuardrails(params: {
   spotSol: number;
   shortSol: number;
   positionDivergenceThresholdPct: number;
+  killSwitchPath?: string;
 }): GuardrailResult {
   // Kill switch — highest priority
-  if (checkKillSwitch()) {
+  if (checkKillSwitch(params.killSwitchPath)) {
     return {
       ok: false,
       reason: 'Kill switch activated (/tmp/vault-kill exists)',

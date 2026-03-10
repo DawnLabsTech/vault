@@ -48,11 +48,10 @@ export class JupiterLending implements LendingProtocol {
   async getApy(): Promise<number> {
     return withRetry(async () => {
       const res = await fetch(
-        `${JUPITER_LEND_API}/rates?mint=${USDC_MINT}`,
+        `${JUPITER_LEND_API}/earn/tokens`,
         { headers: this.getHeaders() },
       );
       if (!res.ok) {
-        // Jupiter Lend may require API key; return 0 if unauthorized
         if (res.status === 401) {
           log.debug('Jupiter Lend API requires authentication, returning 0 APY');
           return 0;
@@ -60,14 +59,17 @@ export class JupiterLending implements LendingProtocol {
         throw new Error(`Jupiter Lend APY fetch failed: ${res.status}`);
       }
       const data = await res.json() as any;
-      return data?.supplyApy ?? 0;
+      const tokens = Array.isArray(data) ? data : [];
+      const usdc = tokens.find((t: any) => t.assetAddress === USDC_MINT);
+      // totalRate is in basis points (406 = 4.06%), convert to decimal (0.0406)
+      return usdc?.totalRate ? usdc.totalRate / 1e4 : 0;
     }, 'jupiter-lend-apy');
   }
 
   async getBalance(): Promise<number> {
     return withRetry(async () => {
       const res = await fetch(
-        `${JUPITER_LEND_API}/positions?wallet=${this.walletAddress}&mint=${USDC_MINT}`,
+        `${JUPITER_LEND_API}/earn/positions?users=${this.walletAddress}`,
         { headers: this.getHeaders() },
       );
       if (!res.ok) {
@@ -79,7 +81,15 @@ export class JupiterLending implements LendingProtocol {
         return 0;
       }
       const data = await res.json() as any;
-      return data?.balance ?? 0;
+      // Each position has token.assetAddress and underlyingBalance (in base units)
+      const positions = Array.isArray(data) ? data : [];
+      const usdcPos = positions.find((p: any) => p.token?.assetAddress === USDC_MINT);
+      if (!usdcPos) return 0;
+      // underlyingAssets = actual deposited amount (shares converted to assets)
+      // underlyingBalance includes wallet balance — do NOT use
+      const raw = parseFloat(usdcPos.underlyingAssets ?? '0');
+      // Convert from base units (6 decimals) to USDC
+      return raw / 1e6;
     }, 'jupiter-lend-balance');
   }
 
@@ -97,13 +107,13 @@ export class JupiterLending implements LendingProtocol {
     // POST request returns a serialized transaction
     const amountBase = Math.floor(amount * 1e6); // USDC 6 decimals
 
-    const res = await fetch(`${JUPITER_LEND_API}/deposit`, {
+    const res = await fetch(`${JUPITER_LEND_API}/earn/deposit`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({
-        mint: USDC_MINT,
+        asset: USDC_MINT,
         amount: amountBase.toString(),
-        userPublicKey: this.walletAddress,
+        signer: this.walletAddress,
       }),
     });
 
@@ -146,13 +156,13 @@ export class JupiterLending implements LendingProtocol {
 
     const amountBase = Math.floor(amount * 1e6);
 
-    const res = await fetch(`${JUPITER_LEND_API}/withdraw`, {
+    const res = await fetch(`${JUPITER_LEND_API}/earn/withdraw`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({
-        mint: USDC_MINT,
+        asset: USDC_MINT,
         amount: amountBase.toString(),
-        userPublicKey: this.walletAddress,
+        signer: this.walletAddress,
       }),
     });
 
