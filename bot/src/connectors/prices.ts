@@ -53,7 +53,9 @@ async function fetchPricesFromJupiter(): Promise<PriceData> {
     throw new Error(`Jupiter Price API error: HTTP ${response.status} - ${text}`);
   }
 
-  const json = (await response.json()) as JupiterPriceResponse;
+  const raw = await response.json();
+  log.debug({ rawKeys: Object.keys(raw), raw: JSON.stringify(raw).slice(0, 500) }, 'Jupiter raw response');
+  const json = raw as JupiterPriceResponse;
 
   const solEntry = json[SOL_MINT];
   const dawnsolEntry = json[DAWNSOL_MINT];
