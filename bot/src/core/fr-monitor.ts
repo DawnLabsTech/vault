@@ -16,9 +16,11 @@ const log = createChildLogger('fr-monitor');
 export class FrMonitor {
   private insertStmt: Database.Statement;
   private db: Database.Database;
+  private periodsPerDay: number;
 
-  constructor(db: Database.Database) {
+  constructor(db: Database.Database, periodsPerDay = 3) {
     this.db = db;
+    this.periodsPerDay = periodsPerDay;
 
     // Prepared statements for hot-path operations
     this.insertStmt = db.prepare(`
@@ -31,7 +33,7 @@ export class FrMonitor {
 
   /** Record a new funding rate data point. */
   recordFundingRate(data: FundingRateData): void {
-    const annualized = frToAnnualized(data.fundingRate);
+    const annualized = frToAnnualized(data.fundingRate, this.periodsPerDay);
     const ts = new Date(data.fundingTime).toISOString();
 
     this.insertStmt.run(
@@ -70,10 +72,10 @@ export class FrMonitor {
 
   /**
    * Average annualized FR over the last `days` days.
-   * Since FR arrives every 8h, we look at the last `days * 3` records.
+   * Records per day depends on exchange (3 for 8h Binance, 24 for 1h Drift).
    */
   getAverageAnnualized(days: number): number {
-    const limit = days * 3;
+    const limit = days * this.periodsPerDay;
     const row = this.db
       .prepare(
         `SELECT AVG(annualized_rate) AS avg_rate

@@ -7,6 +7,7 @@ import { getStateJson } from '../measurement/state-store.js';
 import { getDb } from '../measurement/db.js';
 import { FrMonitor } from '../core/fr-monitor.js';
 import type { BaseAllocator } from '../strategies/base-allocator.js';
+import type { PerpExchange } from '../types.js';
 
 const log = createChildLogger('api');
 
@@ -16,6 +17,7 @@ export class ApiServer {
   private server: ReturnType<typeof createServer> | null = null;
   private frMonitor: FrMonitor | null = null;
   private baseAllocator: BaseAllocator | null = null;
+  private perpExchange: PerpExchange = 'binance';
 
   setFrMonitor(monitor: FrMonitor): void {
     this.frMonitor = monitor;
@@ -23,6 +25,10 @@ export class ApiServer {
 
   setBaseAllocator(allocator: BaseAllocator): void {
     this.baseAllocator = allocator;
+  }
+
+  setPerpExchange(exchange: PerpExchange): void {
+    this.perpExchange = exchange;
   }
 
   start(port: number = 3000): void {
@@ -138,6 +144,18 @@ export class ApiServer {
         break;
       }
 
+      case '/api/fr-history': {
+        const months = parseInt(url.searchParams.get('months') || '3');
+        const frHistory = await this.fetchFrHistory(months);
+        this.sendJson(res, frHistory);
+        break;
+      }
+
+      case '/api/config': {
+        this.sendJson(res, { perpExchange: this.perpExchange });
+        break;
+      }
+
       case '/api/apys': {
         const apys = await this.getApys();
         this.sendJson(res, apys);
@@ -188,6 +206,57 @@ export class ApiServer {
     }
 
     return { lending, dawnsolApy };
+  }
+
+  private async fetchFrHistory(months: number): Promise<Array<{
+    symbol: string;
+    fundingRate: number;
+    fundingTime: number;
+    markPrice?: number;
+  }>> {
+    const startTime = Date.now() - months * 30 * 24 * 60 * 60 * 1000;
+
+    if (this.perpExchange === 'drift') {
+      try {
+        const res = await fetch(
+          `https://data.api.drift.trade/fundingRates?marketIndex=0`,
+        );
+        if (!res.ok) return [];
+        const json = (await res.json()) as any;
+        const records: any[] = json.fundingRates ?? json;
+        return records
+          .filter((d: any) => {
+            const ts = parseInt(d.ts) * 1000;
+            return ts >= startTime;
+          })
+          .map((d: any) => ({
+            symbol: 'SOL-PERP',
+            fundingRate: parseInt(d.fundingRate) / 1e9,
+            fundingTime: parseInt(d.ts) * 1000,
+          }));
+      } catch (err) {
+        log.warn({ error: (err as Error).message }, 'Failed to fetch Drift FR history');
+        return [];
+      }
+    }
+
+    // Binance
+    try {
+      const res = await fetch(
+        `https://fapi.binance.com/fapi/v1/fundingRate?symbol=SOLUSDC&startTime=${startTime}&limit=1000`,
+      );
+      if (!res.ok) return [];
+      const data = (await res.json()) as any[];
+      return data.map((d: any) => ({
+        symbol: d.symbol,
+        fundingRate: parseFloat(d.fundingRate),
+        fundingTime: d.fundingTime,
+        markPrice: d.markPrice ? parseFloat(d.markPrice) : undefined,
+      }));
+    } catch (err) {
+      log.warn({ error: (err as Error).message }, 'Failed to fetch Binance FR history');
+      return [];
+    }
   }
 
   private sendJson(res: ServerResponse, data: unknown): void {

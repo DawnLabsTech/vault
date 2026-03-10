@@ -14,23 +14,26 @@ import { getStateJson, setStateJson } from '../measurement/state-store.js';
 import { getPrices } from '../connectors/prices.js';
 import { sendAlert } from '../utils/notify.js';
 import { SolanaRpc } from '../connectors/solana/rpc.js';
-import { BotState, EventType, ActionType, type PortfolioSnapshot, type Action, type FundingRateData } from '../types.js';
+import { BotState, EventType, ActionType, type PerpExchange, type PortfolioSnapshot, type Action, type FundingRateData } from '../types.js';
 import type { BinanceRestClient } from '../connectors/binance/rest.js';
 import type { BinanceWsClient } from '../connectors/binance/ws.js';
+import type { DriftPerp } from '../connectors/drift/perp.js';
 
 const log = createChildLogger('orchestrator');
 
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 export interface OrchestratorDeps {
-  binanceRest: BinanceRestClient;
-  binanceWs: BinanceWsClient;
+  binanceRest: BinanceRestClient | null;
+  binanceWs: BinanceWsClient | null;
+  driftPerp: DriftPerp | null;
   frMonitor: FrMonitor;
   baseAllocator: BaseAllocator;
   dnExecutor: DnExecutor;
   riskManager: RiskManager;
   solanaRpc: SolanaRpc;
   walletAddress: string;
+  perpExchange?: PerpExchange;
 }
 
 interface PersistedState {
@@ -46,6 +49,16 @@ export class Orchestrator {
   private dnOperationInProgress = false;
   private startedAt: number = Date.now();
   private running = false;
+
+  // Snapshot cache — shared across healthCheck, evaluateAndAct, executeAction
+  private snapshotCache: { data: PortfolioSnapshot; fetchedAt: number } | null = null;
+  private static readonly SNAPSHOT_CACHE_TTL_MS = 10_000;
+
+  // WebSocket connection tracking
+  private wsConnected = false;
+
+  // Daily PnL timer
+  private dailyPnlTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(deps: OrchestratorDeps) {
     this.deps = deps;
@@ -82,8 +95,12 @@ export class Orchestrator {
   private setupScheduledTasks(): void {
     const config = getConfig();
 
-    // FR monitoring — every hour
+    // FR monitoring — every hour (skipped when WebSocket is connected)
     this.scheduler.register('fr-fetch', 3_600_000, async () => {
+      if (this.wsConnected) {
+        log.debug('Skipping REST FR fetch — WebSocket is connected');
+        return;
+      }
       await this.fetchFundingRate();
     });
 
@@ -102,13 +119,8 @@ export class Orchestrator {
       await this.rebalanceLending();
     });
 
-    // Daily PnL — check every minute, execute at UTC 00:00
-    this.scheduler.register('daily-pnl', 60_000, async () => {
-      const now = new Date();
-      if (now.getUTCHours() === 0 && now.getUTCMinutes() === 0) {
-        await this.runDailyPnl();
-      }
-    });
+    // Daily PnL — scheduled via setTimeout at UTC 00:00
+    this.scheduleDailyPnl();
 
     // Health check + kill switch — every 5 seconds
     this.scheduler.register('health-check', 5_000, async () => {
@@ -134,17 +146,23 @@ export class Orchestrator {
     this.startedAt = Date.now();
     log.info({ state: this.botState, dryRun: getConfig().general.dryRun }, 'Orchestrator starting');
 
-    // Connect Binance WebSocket
-    this.deps.binanceWs.onFundingRate((data) => {
-      const frData: FundingRateData = {
-        symbol: data.symbol,
-        fundingRate: data.fundingRate,
-        fundingTime: data.nextFundingTime,
-        markPrice: data.markPrice,
-      };
-      this.deps.frMonitor.recordFundingRate(frData);
-    });
-    this.deps.binanceWs.connect();
+    // Track WebSocket connection state (Binance only)
+    if (this.deps.binanceWs) {
+      this.deps.binanceWs.onConnectionStateChange((state) => {
+        this.wsConnected = state === 'connected';
+      });
+
+      this.deps.binanceWs.onFundingRate((data) => {
+        const frData: FundingRateData = {
+          symbol: data.symbol,
+          fundingRate: data.fundingRate,
+          fundingTime: data.nextFundingTime,
+          markPrice: data.markPrice,
+        };
+        this.deps.frMonitor.recordFundingRate(frData);
+      });
+      this.deps.binanceWs.connect();
+    }
 
     // Initial FR fetch
     await this.fetchFundingRate();
@@ -163,7 +181,18 @@ export class Orchestrator {
     log.info('Orchestrator stopping...');
     this.running = false;
     this.scheduler.stop();
-    this.deps.binanceWs.disconnect();
+    if (this.dailyPnlTimer) {
+      clearTimeout(this.dailyPnlTimer);
+      this.dailyPnlTimer = null;
+    }
+    this.deps.binanceWs?.disconnect();
+    if (this.deps.driftPerp) {
+      try {
+        await this.deps.driftPerp.cleanup();
+      } catch (err) {
+        log.warn({ error: (err as Error).message }, 'Failed to cleanup Drift perp client');
+      }
+    }
     this.persistState();
     await sendAlert('Vault Bot stopped', 'info');
     log.info('Orchestrator stopped');
@@ -172,6 +201,25 @@ export class Orchestrator {
   private async fetchFundingRate(): Promise<void> {
     try {
       const config = getConfig();
+
+      if (this.deps.perpExchange === 'drift' && this.deps.driftPerp) {
+        // Drift mode: fetch FR via Drift REST API
+        const fr = await this.deps.driftPerp.getFundingRate();
+        if (fr !== 0) {
+          this.deps.frMonitor.recordFundingRate({
+            symbol: 'SOL-PERP',
+            fundingRate: fr,
+            fundingTime: Date.now(),
+          });
+        }
+        return;
+      }
+
+      if (!this.deps.binanceRest) {
+        log.debug('Skipping FR fetch — no perp connector available');
+        return;
+      }
+
       const rates = await this.deps.binanceRest.getFundingRate(config.binance.symbol, 1);
       const rate = rates[0];
       if (rate) {
@@ -188,55 +236,60 @@ export class Orchestrator {
   }
 
   private async evaluateAndAct(): Promise<void> {
-    const config = getConfig();
-    const thresholds = config.thresholds;
+    try {
+      const config = getConfig();
+      const thresholds = config.thresholds;
 
-    const snapshot = await this.buildSnapshot();
+      const snapshot = await this.getOrBuildSnapshot();
 
-    const signals: StateSignals = {
-      currentState: this.botState,
-      avgFrAnnualized: this.deps.frMonitor.getAverageAnnualized(thresholds.frEntryConfirmationDays),
-      latestFrAnnualized: this.deps.frMonitor.getLatestAnnualized(),
-      daysAboveEntry: this.deps.frMonitor.getDaysAboveThreshold(thresholds.frEntryAnnualized),
-      daysBelowExit: this.deps.frMonitor.getDaysBelowThreshold(thresholds.frExitAnnualized),
-      riskApproved: true, // Will be overridden by risk manager
-      dnOperationInProgress: this.dnOperationInProgress,
-      totalNavUsdc: snapshot.totalNavUsdc,
-    };
+      const signals: StateSignals = {
+        currentState: this.botState,
+        avgFrAnnualized: this.deps.frMonitor.getAverageAnnualized(thresholds.frEntryConfirmationDays),
+        latestFrAnnualized: this.deps.frMonitor.getLatestAnnualized(),
+        daysAboveEntry: this.deps.frMonitor.getDaysAboveThreshold(thresholds.frEntryAnnualized),
+        daysBelowExit: this.deps.frMonitor.getDaysBelowThreshold(thresholds.frExitAnnualized),
+        riskApproved: true, // Will be overridden by risk manager
+        dnOperationInProgress: this.dnOperationInProgress,
+        totalNavUsdc: snapshot.totalNavUsdc,
+      };
 
-    const result = evaluateState(signals, config);
+      const result = evaluateState(signals, config);
 
-    if (result.nextState !== this.botState) {
-      log.info({
-        from: this.botState,
-        to: result.nextState,
-        reason: result.reason,
-      }, 'State transition');
-
-      recordEvent({
-        timestamp: new Date().toISOString(),
-        eventType: EventType.STATE_CHANGE,
-        amount: 0,
-        asset: 'STATE',
-        metadata: {
+      if (result.nextState !== this.botState) {
+        log.info({
           from: this.botState,
           to: result.nextState,
           reason: result.reason,
-        },
-      });
+        }, 'State transition');
 
-      await sendAlert(
-        `State: ${this.botState} → ${result.nextState}\nReason: ${result.reason}`,
-        result.actions.some(a => a.type === ActionType.EMERGENCY_EXIT) ? 'critical' : 'warning',
-      );
+        recordEvent({
+          timestamp: new Date().toISOString(),
+          eventType: EventType.STATE_CHANGE,
+          amount: 0,
+          asset: 'STATE',
+          metadata: {
+            from: this.botState,
+            to: result.nextState,
+            reason: result.reason,
+          },
+        });
 
-      // Execute actions
-      for (const action of result.actions) {
-        await this.executeAction(action);
+        await sendAlert(
+          `State: ${this.botState} → ${result.nextState}\nReason: ${result.reason}`,
+          result.actions.some(a => a.type === ActionType.EMERGENCY_EXIT) ? 'critical' : 'warning',
+        );
+
+        // Execute actions
+        for (const action of result.actions) {
+          await this.executeAction(action);
+        }
+
+        this.botState = result.nextState;
+        this.persistState();
       }
-
-      this.botState = result.nextState;
-      this.persistState();
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'evaluateAndAct failed');
+      await sendAlert(`State evaluation failed: ${(err as Error).message}`, 'warning');
     }
   }
 
@@ -244,7 +297,7 @@ export class Orchestrator {
     const config = getConfig();
 
     // Pre-trade risk check
-    const snapshot = await this.buildSnapshot();
+    const snapshot = await this.getOrBuildSnapshot();
     const riskCheck = this.deps.riskManager.preTradeCheck(action, snapshot);
     if (!riskCheck.approved) {
       log.warn({ action: action.type, reason: riskCheck.reason }, 'Action rejected by risk manager');
@@ -291,6 +344,9 @@ export class Orchestrator {
         break;
       }
     }
+
+    // Action completed — invalidate snapshot cache since portfolio changed
+    this.snapshotCache = null;
   }
 
   private async rebalanceLending(): Promise<void> {
@@ -322,10 +378,20 @@ export class Orchestrator {
   private async takeSnapshot(): Promise<void> {
     try {
       const snapshot = await this.buildSnapshot();
+      this.snapshotCache = { data: snapshot, fetchedAt: Date.now() };
       recordSnapshot(snapshot);
     } catch (err) {
       log.error({ error: (err as Error).message }, 'Failed to take snapshot');
     }
+  }
+
+  private async getOrBuildSnapshot(): Promise<PortfolioSnapshot> {
+    if (this.snapshotCache && Date.now() - this.snapshotCache.fetchedAt < Orchestrator.SNAPSHOT_CACHE_TTL_MS) {
+      return this.snapshotCache.data;
+    }
+    const snapshot = await this.buildSnapshot();
+    this.snapshotCache = { data: snapshot, fetchedAt: Date.now() };
+    return snapshot;
   }
 
   private async buildSnapshot(): Promise<PortfolioSnapshot> {
@@ -353,25 +419,39 @@ export class Orchestrator {
       log.warn({ error: (err as Error).message }, 'Failed to get buffer USDC for snapshot');
     }
 
-    // Get Binance balances
+    // Get perp exchange balances (Binance or Drift)
     let binanceUsdcBalance = 0;
     let binancePerpUnrealizedPnl = 0;
     let binancePerpSize = 0;
-    try {
-      const balances = await this.deps.binanceRest.getBalance();
-      const usdcBal = balances.find((b: any) => b.asset === 'USDC' || b.asset === 'USDT');
-      binanceUsdcBalance = usdcBal ? parseFloat(usdcBal.balance) : 0;
 
-      if (this.botState === BotState.BASE_DN) {
-        const positions = await this.deps.binanceRest.getPosition(config.binance.symbol);
-        const pos = positions.find((p: any) => parseFloat(p.positionAmt) !== 0);
-        if (pos) {
-          binancePerpUnrealizedPnl = parseFloat(pos.unrealizedProfit);
-          binancePerpSize = Math.abs(parseFloat(pos.positionAmt));
+    if (this.deps.perpExchange === 'drift' && this.deps.driftPerp) {
+      try {
+        binanceUsdcBalance = await this.deps.driftPerp.getUsdcBalance();
+        if (this.botState === BotState.BASE_DN) {
+          const pos = await this.deps.driftPerp.getPosition();
+          binancePerpUnrealizedPnl = pos.unrealizedPnl;
+          binancePerpSize = pos.size;
         }
+      } catch (err) {
+        log.warn({ error: (err as Error).message }, 'Failed to get Drift data for snapshot');
       }
-    } catch (err) {
-      log.warn({ error: (err as Error).message }, 'Failed to get Binance data for snapshot');
+    } else if (this.deps.binanceRest) {
+      try {
+        const balances = await this.deps.binanceRest.getBalance();
+        const usdcBal = balances.find((b: any) => b.asset === 'USDC' || b.asset === 'USDT');
+        binanceUsdcBalance = usdcBal ? parseFloat(usdcBal.balance) : 0;
+
+        if (this.botState === BotState.BASE_DN) {
+          const positions = await this.deps.binanceRest.getPosition(config.binance.symbol);
+          const pos = positions.find((p: any) => parseFloat(p.positionAmt) !== 0);
+          if (pos) {
+            binancePerpUnrealizedPnl = parseFloat(pos.unrealizedProfit);
+            binancePerpSize = Math.abs(parseFloat(pos.positionAmt));
+          }
+        }
+      } catch (err) {
+        log.warn({ error: (err as Error).message }, 'Failed to get Binance data for snapshot');
+      }
     }
 
     // dawnSOL (from DN executor state)
@@ -422,6 +502,22 @@ export class Orchestrator {
     }
   }
 
+  private scheduleDailyPnl(): void {
+    const now = new Date();
+    const nextMidnight = new Date(now);
+    nextMidnight.setUTCDate(nextMidnight.getUTCDate() + 1);
+    nextMidnight.setUTCHours(0, 0, 0, 0);
+    const msUntilMidnight = nextMidnight.getTime() - now.getTime();
+
+    this.dailyPnlTimer = setTimeout(async () => {
+      if (!this.running) return;
+      await this.runDailyPnl();
+      this.scheduleDailyPnl();
+    }, msUntilMidnight);
+
+    log.info({ msUntilMidnight }, 'Daily PnL scheduled');
+  }
+
   private async healthCheck(): Promise<void> {
     // Kill switch check
     if (checkKillSwitch()) {
@@ -442,7 +538,7 @@ export class Orchestrator {
 
     // Continuous risk monitoring
     try {
-      const snapshot = await this.buildSnapshot();
+      const snapshot = await this.getOrBuildSnapshot();
       const monitorResult = this.deps.riskManager.continuousMonitor(snapshot);
 
       for (const alert of monitorResult.alerts) {

@@ -19,7 +19,8 @@ import { DriftLending } from './connectors/defi/drift.js';
 import { JupiterLending } from './connectors/defi/jupiter-lend.js';
 import { JupiterSwap } from './connectors/defi/jupiter-swap.js';
 import { SolanaTransactionSender } from './connectors/solana/tx-sender.js';
-import { buildDnConnectors } from './connectors/dn-connectors.js';
+import { buildDnConnectors, buildDriftDnConnectors } from './connectors/dn-connectors.js';
+import { DriftPerp } from './connectors/drift/perp.js';
 import type { LendingProtocol } from './types.js';
 
 const log = createChildLogger('main');
@@ -39,17 +40,25 @@ async function main(): Promise<void> {
   // Start config file watching
   configManager.startWatching();
 
-  // Initialize Binance clients
-  const binanceRest = new BinanceRestClient(
-    process.env.BINANCE_API_KEY || '',
-    process.env.BINANCE_API_SECRET || '',
-    config.binance.testnet,
-  );
+  const perpExchange = config.perp.exchange;
+  log.info({ perpExchange }, 'Perp exchange selected');
 
-  const binanceWs = new BinanceWsClient(
-    config.binance.symbol.toLowerCase(),
-    config.binance.testnet,
-  );
+  // Initialize Binance clients (only when using Binance for perp)
+  let binanceRest: BinanceRestClient | null = null;
+  let binanceWs: BinanceWsClient | null = null;
+
+  if (perpExchange === 'binance') {
+    binanceRest = new BinanceRestClient(
+      process.env.BINANCE_API_KEY || '',
+      process.env.BINANCE_API_SECRET || '',
+      config.binance.testnet,
+    );
+
+    binanceWs = new BinanceWsClient(
+      config.binance.symbol.toLowerCase(),
+      config.binance.testnet,
+    );
+  }
 
   // Load wallet and initialize lending adapters
   const rpcUrl = process.env.HELIUS_RPC_URL || '';
@@ -108,19 +117,52 @@ async function main(): Promise<void> {
 
   // Initialize monitors and strategies
   const db = getDb();
-  const frMonitor = new FrMonitor(db);
+  const frPeriodsPerDay = perpExchange === 'drift' ? 24 : 3;
+  const frMonitor = new FrMonitor(db, frPeriodsPerDay);
   const baseAllocator = new BaseAllocator(lendingAdapters, config);
 
-  // Build real DN connectors (dryRun guard is inside each method)
-  const dnConnectors = buildDnConnectors({
-    binanceRest,
-    lendingAdapters,
-    baseAllocator,
-    jupiterSwap,
-    txSender: txSender!,
-    walletAddress,
-    config,
-  });
+  // Track latest mark price from WebSocket for DN connectors
+  let latestMarkPrice = 0;
+  if (binanceWs) {
+    binanceWs.onMarkPrice((data) => { latestMarkPrice = data.markPrice; });
+  }
+
+  // Ensure txSender is available in live mode
+  if (!config.general.dryRun && !txSender) {
+    throw new Error('TxSender is required in live mode — check SOLANA_PRIVATE_KEY');
+  }
+
+  // Build DN connectors based on perp exchange selection
+  let dnConnectors;
+  let driftPerp: DriftPerp | undefined;
+
+  if (perpExchange === 'drift') {
+    log.info('Building Drift DN connectors');
+    const wallet = loadWalletFromEnv();
+    driftPerp = new DriftPerp(rpcUrl, wallet.secretKey, walletAddress, config.solana.network);
+    dnConnectors = buildDriftDnConnectors({
+      driftPerp,
+      lendingAdapters,
+      baseAllocator,
+      jupiterSwap,
+      txSender: txSender!,
+      walletAddress,
+      config,
+    });
+  } else {
+    log.info('Building Binance DN connectors');
+    dnConnectors = buildDnConnectors({
+      binanceRest: binanceRest!,
+      lendingAdapters,
+      baseAllocator,
+      jupiterSwap,
+      txSender: txSender!,
+      walletAddress,
+      config,
+      getLatestMarkPrice: () => latestMarkPrice,
+    });
+  }
+
   const dnExecutor = new DnExecutor(config, dnConnectors, walletAddress);
   const riskManager = new RiskManager(config);
 
@@ -137,12 +179,22 @@ async function main(): Promise<void> {
     riskManager,
     solanaRpc,
     walletAddress,
+    perpExchange,
+    driftPerp: driftPerp ?? null,
   });
+
+  // Start API server
+  const apiServer = new ApiServer();
+  apiServer.setFrMonitor(frMonitor);
+  apiServer.setBaseAllocator(baseAllocator);
+  apiServer.setPerpExchange(perpExchange);
+  apiServer.start(3000);
 
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
     log.info({ signal }, 'Shutdown signal received');
     await orchestrator.stop();
+    apiServer.stop();
     configManager.stopWatching();
     closeDb();
     log.info('Shutdown complete');
@@ -161,19 +213,14 @@ async function main(): Promise<void> {
     await sendAlert(`Unhandled rejection: ${reason}`, 'critical');
   });
 
-  // Start API server
-  const apiServer = new ApiServer();
-  apiServer.setFrMonitor(frMonitor);
-  apiServer.setBaseAllocator(baseAllocator);
-  apiServer.start(3000);
-
   // Start the bot
   await orchestrator.start();
 
   log.info({
     dryRun: config.general.dryRun,
-    testnet: config.binance.testnet,
-    symbol: config.binance.symbol,
+    perpExchange,
+    symbol: config.perp.symbol,
+    testnet: perpExchange === 'binance' ? config.binance.testnet : false,
   }, 'Vault Strategy Bot is running');
 }
 

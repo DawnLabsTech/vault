@@ -1,13 +1,16 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useFrHistory } from '@/hooks/useFr';
+import { useFrHistory, usePerpExchange } from '@/hooks/useFr';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { FR_ENTRY_THRESHOLD, FR_EXIT_THRESHOLD, FR_EMERGENCY_THRESHOLD } from '@/lib/constants';
 import { createChart, LineSeries, type IChartApi, type ISeriesApi, ColorType } from 'lightweight-charts';
 
 export function FrChart() {
-  const { data, isLoading } = useFrHistory(3);
+  const { data: configData } = usePerpExchange();
+  const exchange = configData?.perpExchange ?? 'binance';
+  const exchangeLabel = exchange === 'drift' ? 'Drift SOL-PERP' : 'Binance SOLUSDC';
+  const { data, isLoading } = useFrHistory(3, exchange);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<{
@@ -83,9 +86,11 @@ export function FrChart() {
     if (!seriesRef.current || !data?.length) return;
 
     const sorted = [...data].sort((a, b) => a.fundingTime - b.fundingTime);
+    // Drift: 1h intervals (24/day), Binance: 8h intervals (3/day)
+    const periodsPerDay = exchange === 'drift' ? 24 : 3;
     const frData = sorted.map((d) => ({
       time: Math.floor(d.fundingTime / 1000) as any,
-      value: d.fundingRate * 100 * 3 * 365, // annualized %
+      value: d.fundingRate * 100 * periodsPerDay * 365, // annualized %
     }));
 
     seriesRef.current.fr.setData(frData);
@@ -100,13 +105,13 @@ export function FrChart() {
     );
 
     chartRef.current?.timeScale().fitContent();
-  }, [data]);
+  }, [data, exchange]);
 
   return (
     <div className="bg-vault-card border border-vault-border rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
-          Funding Rate (Annualized %) — 3M
+          Funding Rate (Annualized %) — {exchangeLabel} — 3M
         </h3>
         <div className="flex gap-3 text-[10px]">
           <span className="text-vault-warning">-- Entry ({FR_ENTRY_THRESHOLD}%)</span>

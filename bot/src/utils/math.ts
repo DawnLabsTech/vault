@@ -6,14 +6,17 @@ Big.RM = Big.roundDown;
 
 export { Big };
 
-/** Convert 8h funding rate to annualized percentage */
-export function frToAnnualized(fr8h: number): number {
-  return fr8h * 3 * 365 * 100;
+/** Convert funding rate to annualized percentage.
+ *  @param fr - single-period funding rate (e.g. 8h for Binance, 1h for Drift)
+ *  @param periodsPerDay - number of FR periods per day (3 for 8h, 24 for 1h)
+ */
+export function frToAnnualized(fr: number, periodsPerDay = 3): number {
+  return fr * periodsPerDay * 365 * 100;
 }
 
-/** Convert annualized percentage to 8h funding rate */
-export function annualizedToFr(annualPct: number): number {
-  return annualPct / 100 / 3 / 365;
+/** Convert annualized percentage to per-period funding rate */
+export function annualizedToFr(annualPct: number, periodsPerDay = 3): number {
+  return annualPct / 100 / periodsPerDay / 365;
 }
 
 /** Calculate Sharpe Ratio from daily returns */
