@@ -4,15 +4,22 @@ import { useEffect, useRef } from 'react';
 import { useFrHistory } from '@/hooks/useFr';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { FR_ENTRY_THRESHOLD, FR_EXIT_THRESHOLD, FR_EMERGENCY_THRESHOLD } from '@/lib/constants';
-import { createChart, LineSeries, type IChartApi, ColorType } from 'lightweight-charts';
+import { createChart, LineSeries, type IChartApi, type ISeriesApi, ColorType } from 'lightweight-charts';
 
 export function FrChart() {
   const { data, isLoading } = useFrHistory(3);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<{
+    fr: ISeriesApi<'Line'>;
+    entry: ISeriesApi<'Line'>;
+    exit: ISeriesApi<'Line'>;
+    emergency: ISeriesApi<'Line'>;
+  } | null>(null);
 
+  // Initialize chart + series once when container is available
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || chartRef.current) return;
 
     const chart = createChart(containerRef.current, {
       layout: {
@@ -31,6 +38,31 @@ export function FrChart() {
     });
     chartRef.current = chart;
 
+    const fr = chart.addSeries(LineSeries, {
+      color: '#00ff88',
+      lineWidth: 1,
+      priceLineVisible: false,
+    });
+    const entry = chart.addSeries(LineSeries, {
+      color: '#ffaa00',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+    });
+    const exit = chart.addSeries(LineSeries, {
+      color: '#888',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+    });
+    const emergency = chart.addSeries(LineSeries, {
+      color: '#ff4444',
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+    });
+    seriesRef.current = { fr, entry, exit, emergency };
+
     const observer = new ResizeObserver(() => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth });
@@ -41,67 +73,33 @@ export function FrChart() {
     return () => {
       observer.disconnect();
       chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
     };
-  }, []);
+  });
 
+  // Update data when it changes
   useEffect(() => {
-    if (!chartRef.current || !data?.length) return;
-    const chart = chartRef.current;
+    if (!seriesRef.current || !data?.length) return;
 
     const sorted = [...data].sort((a, b) => a.fundingTime - b.fundingTime);
-
     const frData = sorted.map((d) => ({
       time: Math.floor(d.fundingTime / 1000) as any,
       value: d.fundingRate * 100 * 3 * 365, // annualized %
     }));
 
-    // FR line
-    const frSeries = chart.addSeries(LineSeries, {
-      color: '#00ff88',
-      lineWidth: 1,
-      priceLineVisible: false,
-    });
-    frSeries.setData(frData);
-
-    // Threshold lines
-    const entryLine = chart.addSeries(LineSeries, {
-      color: '#ffaa00',
-      lineWidth: 1,
-      lineStyle: 2,
-      priceLineVisible: false,
-    });
-    entryLine.setData(
+    seriesRef.current.fr.setData(frData);
+    seriesRef.current.entry.setData(
       frData.map((d) => ({ time: d.time, value: FR_ENTRY_THRESHOLD }))
     );
-
-    const exitLine = chart.addSeries(LineSeries, {
-      color: '#888',
-      lineWidth: 1,
-      lineStyle: 2,
-      priceLineVisible: false,
-    });
-    exitLine.setData(
+    seriesRef.current.exit.setData(
       frData.map((d) => ({ time: d.time, value: FR_EXIT_THRESHOLD }))
     );
-
-    const emergencyLine = chart.addSeries(LineSeries, {
-      color: '#ff4444',
-      lineWidth: 1,
-      lineStyle: 2,
-      priceLineVisible: false,
-    });
-    emergencyLine.setData(
+    seriesRef.current.emergency.setData(
       frData.map((d) => ({ time: d.time, value: FR_EMERGENCY_THRESHOLD }))
     );
 
-    chart.timeScale().fitContent();
-
-    return () => {
-      chart.removeSeries(frSeries);
-      chart.removeSeries(entryLine);
-      chart.removeSeries(exitLine);
-      chart.removeSeries(emergencyLine);
-    };
+    chartRef.current?.timeScale().fitContent();
   }, [data]);
 
   return (
