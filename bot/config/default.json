@@ -1,0 +1,37 @@
+{
+  "general": {
+    "dryRun": true,
+    "logLevel": "info",
+    "tickIntervalMs": 30000,
+    "snapshotIntervalMs": 300000,
+    "lendingRebalanceIntervalMs": 21600000,
+    "dailyPnlTimeUtc": "00:00"
+  },
+  "binance": {
+    "symbol": "SOLUSDT",
+    "leverage": 1,
+    "testnet": true
+  },
+  "solana": {
+    "network": "devnet"
+  },
+  "thresholds": {
+    "frEntryAnnualized": 10,
+    "frEntryConfirmationDays": 3,
+    "frExitAnnualized": 0,
+    "frExitConfirmationDays": 3,
+    "frEmergencyAnnualized": -10,
+    "dnAllocationMax": 0.7,
+    "lendingRebalanceMinDiffBps": 50
+  },
+  "risk": {
+    "dailyLossLimitPct": 2,
+    "maxPositionCapUsd": 10000,
+    "maxTransferSizeUsd": 5000,
+    "positionDivergenceThresholdPct": 3
+  },
+  "lending": {
+    "protocols": ["kamino", "drift", "jupiter"],
+    "bufferPct": 5
+  }
+}
