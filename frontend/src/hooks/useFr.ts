@@ -57,10 +57,3 @@ export function useFrHistory(months = 3, exchange: string = 'binance') {
   );
 }
 
-export function usePerpExchange() {
-  return useSWR<{ perpExchange: string }>(
-    'config',
-    () => apiFetch<{ perpExchange: string }>('/config').catch(() => ({ perpExchange: 'binance' })),
-    { refreshInterval: 0, revalidateOnFocus: false, fallbackData: { perpExchange: 'binance' } }
-  );
-}

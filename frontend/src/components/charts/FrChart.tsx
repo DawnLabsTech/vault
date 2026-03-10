@@ -1,15 +1,21 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { useFrHistory, usePerpExchange } from '@/hooks/useFr';
+import { useEffect, useRef, useState } from 'react';
+import { useFrHistory } from '@/hooks/useFr';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { FR_ENTRY_THRESHOLD, FR_EXIT_THRESHOLD, FR_EMERGENCY_THRESHOLD } from '@/lib/constants';
 import { createChart, LineSeries, type IChartApi, type ISeriesApi, ColorType } from 'lightweight-charts';
 
+type Exchange = 'binance' | 'drift';
+
+const EXCHANGE_CONFIG: Record<Exchange, { label: string; periodsPerDay: number }> = {
+  binance: { label: 'Binance SOLUSDC', periodsPerDay: 3 },
+  drift: { label: 'Drift SOL-PERP', periodsPerDay: 24 },
+};
+
 export function FrChart() {
-  const { data: configData } = usePerpExchange();
-  const exchange = configData?.perpExchange ?? 'binance';
-  const exchangeLabel = exchange === 'drift' ? 'Drift SOL-PERP' : 'Binance SOLUSDC';
+  const [exchange, setExchange] = useState<Exchange>('binance');
+  const { label, periodsPerDay } = EXCHANGE_CONFIG[exchange];
   const { data, isLoading } = useFrHistory(3, exchange);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -86,8 +92,6 @@ export function FrChart() {
     if (!seriesRef.current || !data?.length) return;
 
     const sorted = [...data].sort((a, b) => a.fundingTime - b.fundingTime);
-    // Drift: 1h intervals (24/day), Binance: 8h intervals (3/day)
-    const periodsPerDay = exchange === 'drift' ? 24 : 3;
     const frData = sorted.map((d) => ({
       time: Math.floor(d.fundingTime / 1000) as any,
       value: d.fundingRate * 100 * periodsPerDay * 365, // annualized %
@@ -105,14 +109,39 @@ export function FrChart() {
     );
 
     chartRef.current?.timeScale().fitContent();
-  }, [data, exchange]);
+  }, [data, periodsPerDay]);
 
   return (
     <div className="bg-vault-card border border-vault-border rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
-          Funding Rate (Annualized %) — {exchangeLabel} — 3M
-        </h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
+            Funding Rate (Annualized %) — 3M
+          </h3>
+          <div className="flex bg-vault-bg rounded overflow-hidden border border-vault-border">
+            <button
+              onClick={() => setExchange('binance')}
+              className={`px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                exchange === 'binance'
+                  ? 'bg-vault-accent text-vault-bg'
+                  : 'text-vault-muted hover:text-vault-text'
+              }`}
+            >
+              Binance
+            </button>
+            <button
+              onClick={() => setExchange('drift')}
+              className={`px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                exchange === 'drift'
+                  ? 'bg-vault-accent text-vault-bg'
+                  : 'text-vault-muted hover:text-vault-text'
+              }`}
+            >
+              Drift
+            </button>
+          </div>
+          <span className="text-vault-muted text-[10px]">{label}</span>
+        </div>
         <div className="flex gap-3 text-[10px]">
           <span className="text-vault-warning">-- Entry ({FR_ENTRY_THRESHOLD}%)</span>
           <span className="text-vault-muted">-- Exit ({FR_EXIT_THRESHOLD}%)</span>
