@@ -261,6 +261,23 @@ export function getPerformanceSummary(): PerformanceSummary {
   const allRows = allNoParams(getAllStmt()) as Record<string, unknown>[];
   const allPnl = allRows.map(rowToPnl);
 
+  // Calculate today's live PnL from snapshots/events
+  const todayStr = new Date().toISOString().split('T')[0]!;
+  const lastSavedDate = allPnl.length > 0 ? allPnl[allPnl.length - 1]!.date : null;
+
+  // Only add today's live data if it hasn't been saved yet
+  if (lastSavedDate !== todayStr) {
+    try {
+      const todayPnl = calculateDailyPnl(todayStr);
+      // Only include if we have meaningful snapshot data
+      if (todayPnl.startingNav > 0 || todayPnl.endingNav > 0) {
+        allPnl.push(todayPnl);
+      }
+    } catch (err) {
+      log.warn({ error: (err as Error).message }, 'Failed to calculate live daily PnL');
+    }
+  }
+
   if (allPnl.length === 0) {
     return {
       totalReturn: 0,
