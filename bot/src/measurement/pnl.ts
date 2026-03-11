@@ -255,6 +255,8 @@ export interface PerformanceSummary {
   sharpeRatio: number;
   maxDrawdown: number;
   totalDays: number;
+  realizedPnl: number;
+  totalFees: number;
 }
 
 export function getPerformanceSummary(): PerformanceSummary {
@@ -285,6 +287,8 @@ export function getPerformanceSummary(): PerformanceSummary {
       sharpeRatio: 0,
       maxDrawdown: 0,
       totalDays: 0,
+      realizedPnl: 0,
+      totalFees: 0,
     };
   }
 
@@ -305,11 +309,17 @@ export function getPerformanceSummary(): PerformanceSummary {
   const navSeries = allPnl.map(p => p.endingNav);
   const maxDrawdown = calcMaxDrawdown(navSeries);
 
+  // Cumulative realized PnL and fees
+  const realizedPnl = allPnl.reduce((sum, p) => sum + p.realizedPnl, 0);
+  const totalFees = allPnl.reduce((sum, p) => sum + p.totalFees, 0);
+
   return {
     totalReturn: round(totalReturn, 6),
     annualizedReturn: round(annualizedReturn, 6),
     sharpeRatio: round(sharpeRatio, 4),
     maxDrawdown: round(maxDrawdown, 6),
     totalDays,
+    realizedPnl: round(realizedPnl, 4),
+    totalFees: round(totalFees, 4),
   };
 }

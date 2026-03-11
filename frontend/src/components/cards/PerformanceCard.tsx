@@ -3,7 +3,7 @@
 import { usePerformance } from '@/hooks/usePerformance';
 import { MetricRow } from '@/components/shared/MetricRow';
 import { CardSkeleton } from '@/components/shared/Skeleton';
-import { formatPct, isPositive } from '@/lib/format';
+import { formatPct, formatUsd, isPositive } from '@/lib/format';
 
 export function PerformanceCard() {
   const { data, isLoading } = usePerformance();
@@ -29,6 +29,16 @@ export function PerformanceCard() {
           <MetricRow
             label="Max Drawdown"
             value={formatPct(data.maxDrawdown, 4)}
+            valueColor="negative"
+          />
+          <MetricRow
+            label="Realized PnL"
+            value={formatUsd(data.realizedPnl, 4)}
+            valueColor={isPositive(data.realizedPnl) ? 'positive' : 'negative'}
+          />
+          <MetricRow
+            label="Total Fees"
+            value={formatUsd(-data.totalFees, 4)}
             valueColor="negative"
           />
           <MetricRow label="Trading Days" value={`${data.totalDays}`} />

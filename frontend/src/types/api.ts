@@ -40,6 +40,8 @@ export interface PerformanceSummary {
   sharpeRatio: number;
   maxDrawdown: number;
   totalDays: number;
+  realizedPnl: number;
+  totalFees: number;
 }
 
 // /api/pnl response item
