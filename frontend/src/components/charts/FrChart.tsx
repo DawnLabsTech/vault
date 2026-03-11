@@ -102,7 +102,8 @@ export function FrChart() {
       chartRef.current = null;
       seriesRef.current = null;
     };
-  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Update data when datasets or visibility changes
   useEffect(() => {
@@ -215,11 +216,8 @@ export function FrChart() {
           <span className="text-vault-negative">-- Emergency ({FR_EMERGENCY_THRESHOLD}%)</span>
         </div>
       </div>
-      {isLoading ? (
-        <Skeleton className="h-[250px] w-full" />
-      ) : (
-        <div ref={containerRef} />
-      )}
+      {isLoading && <Skeleton className="h-[250px] w-full" />}
+      <div ref={containerRef} style={{ display: isLoading ? 'none' : undefined }} />
     </div>
   );
 }
