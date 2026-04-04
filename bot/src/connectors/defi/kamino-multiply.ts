@@ -676,14 +676,36 @@ export class KaminoMultiplyLending implements LendingProtocol {
 
     log.info({ amount, targetLeverage, label: this.cfg.label }, 'Multiply deposit starting (manual loop)');
 
+    // Step 0: Check for existing collToken balance in wallet (e.g. stranded from previous failed deposit/withdraw)
+    let existingCollBalance = 0;
+    if (this.needsInputSwap() && this.rpcUrl) {
+      try {
+        const { Connection, PublicKey } = await import('@solana/web3.js');
+        const conn = new Connection(this.rpcUrl, 'confirmed');
+        const tokenAccounts = await conn.getParsedTokenAccountsByOwner(
+          new PublicKey(this.walletAddress),
+          { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') },
+        );
+        const collAccount = tokenAccounts.value.find(t => t.account.data.parsed.info.mint === this.cfg.collToken);
+        existingCollBalance = collAccount ? parseFloat(collAccount.account.data.parsed.info.tokenAmount.uiAmountString) : 0;
+        if (existingCollBalance > 0.001) {
+          log.info({ existingCollBalance, token: this.cfg.collToken.slice(0, 8) }, 'Found existing collToken balance in wallet');
+        }
+      } catch (err) {
+        log.warn({ error: (err as Error).message }, 'Failed to fetch existing collToken balance');
+      }
+    }
+
     // Step 1: Swap inputToken → collToken if needed
-    let collAmount = amount;
+    let collAmount = existingCollBalance;
     if (this.needsInputSwap()) {
       log.info({ from: this.cfg.inputToken!.slice(0, 8), to: this.cfg.collToken.slice(0, 8), amount }, 'Swap inputToken → collToken');
       const { outputAmount, txSig } = await this.jupiterSwap(this.cfg.inputToken!, this.cfg.collToken, amount, this.cfg.inputDecimals ?? 6);
-      collAmount = outputAmount;
+      collAmount += outputAmount;
       txSigs.push(txSig);
       await wait(2000);
+    } else {
+      collAmount += amount;
     }
 
     // Step 2: Initial deposit
