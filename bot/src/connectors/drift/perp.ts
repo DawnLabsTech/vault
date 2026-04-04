@@ -1,3 +1,8 @@
+/**
+ * @deprecated Drift was removed from active use after the 2025 hack.
+ * Kept only for emergency withdrawal of any residual balance.
+ * Do NOT add new Drift integrations.
+ */
 import { createChildLogger } from '../../utils/logger.js';
 import { withRetry } from '../../utils/retry.js';
 import {

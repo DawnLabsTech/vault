@@ -34,24 +34,22 @@ export function PortfolioCard() {
             </div>
           )}
           <MetricRow label="Buffer USDC" value={formatUsd(s.bufferUsdcBalance)} />
-          {/* DN Position group: only show if any DN component is non-zero */}
-          {(s.binanceUsdcBalance > 0 || s.dawnsolBalance > 0 || s.binancePerpSize !== 0) && (
-            <div className="mt-2 pt-2 border-t border-vault-border/50">
-              <span className="text-vault-muted text-xs uppercase tracking-wider">DN Position</span>
-              <MetricRow label="Binance USDC" value={formatUsd(s.binanceUsdcBalance)} />
-              <MetricRow
-                label={`dawnSOL${dawnsolApy !== undefined ? ` (${(dawnsolApy * 100).toFixed(2)}%)` : ''}`}
-                value={`${formatNumber(s.dawnsolBalance)} (${formatUsd(s.dawnsolUsdcValue)})`}
-              />
-              {s.binancePerpSize !== 0 && (
-                <MetricRow label="PERP Short" value={`${formatNumber(s.binancePerpSize)} SOL`} />
-              )}
-              <MetricRow
-                label="PERP Unrealized"
-                value={formatUsd(s.binancePerpUnrealizedPnl)}
-              />
-            </div>
-          )}
+          {/* DN Position group */}
+          <div className="mt-2 pt-2 border-t border-vault-border/50">
+            <span className="text-vault-muted text-xs uppercase tracking-wider">DN Position</span>
+            <MetricRow label="Binance USDC" value={formatUsd(s.binanceUsdcBalance)} />
+            <MetricRow
+              label={`dawnSOL${dawnsolApy !== undefined ? ` (${(dawnsolApy * 100).toFixed(2)}%)` : ''}`}
+              value={`${formatNumber(s.dawnsolBalance)} (${formatUsd(s.dawnsolUsdcValue)})`}
+            />
+            {s.binancePerpSize !== 0 && (
+              <MetricRow label="PERP Short" value={`${formatNumber(s.binancePerpSize)} SOL`} />
+            )}
+            <MetricRow
+              label="PERP Unrealized"
+              value={formatUsd(s.binancePerpUnrealizedPnl)}
+            />
+          </div>
         </div>
       )}
     </div>

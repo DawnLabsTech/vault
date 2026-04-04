@@ -39,7 +39,33 @@
   },
   "lending": {
     "protocols": ["kamino", "jupiter"],
-    "bufferPct": 5
+    "bufferPct": 5,
+    "maxProtocolAllocationPct": 60
+  },
+  "circuitBreaker": {
+    "checkIntervalMs": 60000,
+    "tvlDropThresholdPct": 20,
+    "tvlDropWindowMs": 3600000,
+    "maxConsecutiveFailures": 3,
+    "oracleDeviationBps": 50,
+    "oracleDeviationCriticalBps": 100,
+    "cooldownMs": 86400000
+  },
+  "lendingProtocolMeta": {
+    "kamino": { "auditCount": 3, "ageMonths": 24, "incidents": 0 },
+    "jupiter": { "auditCount": 2, "ageMonths": 18, "incidents": 0 },
+    "drift": { "auditCount": 2, "ageMonths": 24, "incidents": 1, "disabled": true }
+  },
+  "lendingRiskScorer": {
+    "weights": {
+      "tvlScale": 0.30,
+      "protocolMaturity": 0.20,
+      "reserveUtilization": 0.25,
+      "depositConcentration": 0.15,
+      "incidentHistory": 0.10
+    },
+    "tvlSafeThreshold": 50000000,
+    "maxRiskPenalty": 0.03
   },
   "kaminoMultiply": [
     {
@@ -92,18 +118,15 @@
   },
   "riskScorer": {
     "weights": {
-      "pegStability": 0.25,
-      "liquidityDepth": 0.20,
-      "reserveUtilization": 0.20,
-      "tvlProtocol": 0.15,
-      "borrowRateVol": 0.10,
-      "collateralType": 0.10
+      "depegRisk": 0.30,
+      "liquidationProximity": 0.30,
+      "exitLiquidity": 0.20,
+      "reservePressure": 0.20
     },
     "maxDeviationBps": 200,
     "maxSlippageBps": 100,
     "criticalUtilization": 0.90,
     "tvlSafeThreshold": 10000000,
-    "maxBorrowVol": 0.05,
     "rejectThreshold": 90,
     "emergencyThreshold": 85,
     "emaSmoothingAlpha": 0.3

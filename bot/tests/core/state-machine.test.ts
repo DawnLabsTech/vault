@@ -45,7 +45,7 @@ const config: VaultConfig = {
     positionDivergenceThresholdPct: 3,
   },
   lending: {
-    protocols: ['kamino', 'drift', 'jupiter'],
+    protocols: ['kamino', 'jupiter'],
     bufferPct: 5,
   },
 };

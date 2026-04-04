@@ -39,7 +39,7 @@ const config: VaultConfig = {
     maxTransferSizeUsd: 5_000,
     positionDivergenceThresholdPct: 3,
   },
-  lending: { protocols: ['kamino', 'drift', 'jupiter'], bufferPct: 5 },
+  lending: { protocols: ['kamino', 'jupiter'], bufferPct: 5 },
 };
 
 function makeSnapshot(overrides: Partial<PortfolioSnapshot> = {}): PortfolioSnapshot {
@@ -213,6 +213,37 @@ describe('RiskManager.continuousMonitor', () => {
     const result = rm.continuousMonitor(snapshot);
     // No divergence alert because we're in BASE_ONLY
     expect(result.alerts.some(a => a.message.includes('divergence'))).toBe(false);
+  });
+
+  it('returns warning when SOL balance is low', () => {
+    const result = rm.continuousMonitor(makeSnapshot(), { walletSolBalance: 0.03 });
+    expect(result.alerts).toHaveLength(1);
+    expect(result.alerts[0]!.level).toBe('warning');
+    expect(result.alerts[0]!.message).toContain('SOL balance');
+  });
+
+  it('returns critical when SOL balance is critically low', () => {
+    const result = rm.continuousMonitor(makeSnapshot(), { walletSolBalance: 0.005 });
+    expect(result.alerts).toHaveLength(1);
+    expect(result.alerts[0]!.level).toBe('critical');
+  });
+
+  it('returns no SOL alert when balance is healthy', () => {
+    const result = rm.continuousMonitor(makeSnapshot(), { walletSolBalance: 1.0 });
+    expect(result.alerts).toHaveLength(0);
+  });
+
+  it('returns warning when price data is stale', () => {
+    const result = rm.continuousMonitor(makeSnapshot(), { priceDataAgeMs: 400_000 });
+    expect(result.alerts).toHaveLength(1);
+    expect(result.alerts[0]!.level).toBe('warning');
+    expect(result.alerts[0]!.message).toContain('stale');
+  });
+
+  it('returns critical when price data is very stale', () => {
+    const result = rm.continuousMonitor(makeSnapshot(), { priceDataAgeMs: 700_000 });
+    expect(result.alerts).toHaveLength(1);
+    expect(result.alerts[0]!.level).toBe('critical');
   });
 });
 

@@ -7,8 +7,8 @@ Big.RM = Big.roundDown;
 export { Big };
 
 /** Convert funding rate to annualized percentage.
- *  @param fr - single-period funding rate (e.g. 8h for Binance, 1h for Drift)
- *  @param periodsPerDay - number of FR periods per day (3 for 8h, 24 for 1h)
+ *  @param fr - single-period funding rate (e.g. 8h for Binance)
+ *  @param periodsPerDay - number of FR periods per day (3 for 8h)
  */
 export function frToAnnualized(fr: number, periodsPerDay = 3): number {
   return fr * periodsPerDay * 365 * 100;

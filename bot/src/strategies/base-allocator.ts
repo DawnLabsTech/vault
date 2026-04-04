@@ -79,9 +79,13 @@ export class BaseAllocator {
   /**
    * Calculate optimal allocation across protocols.
    *
-   * Strategy: allocate all deployable USDC to the highest-APY protocol.
-   * Only rebalance away from the current winner if the APY difference
-   * exceeds `lendingRebalanceMinDiffBps`.
+   * When maxProtocolAllocationPct is set, distributes across protocols
+   * weighted by APY while respecting the per-protocol cap.
+   * When only 1 protocol is available, caps at maxProtocolAllocationPct
+   * and keeps the rest as wallet buffer.
+   *
+   * Falls back to single-protocol allocation when maxProtocolAllocationPct
+   * is not set (100%).
    */
   calculateOptimalAllocation(
     totalUsdc: number,
@@ -94,6 +98,8 @@ export class BaseAllocator {
 
     const bufferAmount = round(totalUsdc * (this.config.lending.bufferPct / 100), 6);
     const deployable = round(Math.max(totalUsdc - bufferAmount, 0), 6);
+    const maxAllocPct = this.config.lending.maxProtocolAllocationPct ?? 100;
+    const maxPerProtocol = round(deployable * (maxAllocPct / 100), 6);
 
     // Find which protocol currently holds the most
     let currentWinner = '';
@@ -105,7 +111,7 @@ export class BaseAllocator {
       }
     }
 
-    // Determine target protocol: highest APY, but only switch if diff is large enough
+    // Determine target protocol order: highest APY, but only switch if diff is large enough
     const bestProtocol = apyRanking[0]!.protocol;
     const bestApy = apyRanking[0]!.apy;
     const currentWinnerApy =
@@ -114,9 +120,27 @@ export class BaseAllocator {
     const minDiffBps = this.config.thresholds.lendingRebalanceMinDiffBps;
     const apyDiffBps = (bestApy - currentWinnerApy) * 10_000; // convert to bps
 
-    // Stick with current winner unless the best protocol is meaningfully better
-    const targetProtocol =
+    // Determine primary target protocol (gets allocated first)
+    const primaryProtocol =
       currentWinner && apyDiffBps < minDiffBps ? currentWinner : bestProtocol;
+
+    // Calculate target balances with per-protocol cap
+    const targetBalances = new Map<string, number>();
+    let remaining = deployable;
+
+    // Sort by APY but put primary protocol first
+    const sortedProtocols = [...apyRanking].sort((a, b) => {
+      if (a.protocol === primaryProtocol) return -1;
+      if (b.protocol === primaryProtocol) return 1;
+      return b.apy - a.apy;
+    });
+
+    for (const { protocol } of sortedProtocols) {
+      const allocation = round(Math.min(remaining, maxPerProtocol), 6);
+      targetBalances.set(protocol, allocation);
+      remaining = round(remaining - allocation, 6);
+      if (remaining <= 0.01) break;
+    }
 
     log.info(
       {
@@ -126,9 +150,11 @@ export class BaseAllocator {
         currentWinnerApy: round(currentWinnerApy * 100, 2),
         apyDiffBps: round(apyDiffBps, 1),
         minDiffBps,
-        targetProtocol,
+        primaryProtocol,
+        maxAllocPct,
         deployable,
         bufferAmount,
+        targetBalances: Object.fromEntries(targetBalances),
       },
       'Allocation calculation',
     );
@@ -137,7 +163,7 @@ export class BaseAllocator {
 
     for (const { protocol } of apyRanking) {
       const currentBalance = currentAllocations.get(protocol) ?? 0;
-      const targetBalance = protocol === targetProtocol ? deployable : 0;
+      const targetBalance = targetBalances.get(protocol) ?? 0;
       const diff = round(targetBalance - currentBalance, 6);
 
       let action: 'deposit' | 'withdraw' | 'none' = 'none';

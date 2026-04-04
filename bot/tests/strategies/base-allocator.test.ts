@@ -29,7 +29,7 @@ const config: VaultConfig = {
     maxTransferSizeUsd: 5_000,
     positionDivergenceThresholdPct: 3,
   },
-  lending: { protocols: ['kamino', 'drift', 'jupiter'], bufferPct: 5 },
+  lending: { protocols: ['kamino', 'jupiter'], bufferPct: 5 },
 };
 
 function makeMockProtocol(name: string, apy: number, balance: number): LendingProtocol {
@@ -48,26 +48,24 @@ describe('BaseAllocator.calculateOptimalAllocation', () => {
   it('allocates all deployable to highest APY protocol', () => {
     const protocols = [
       makeMockProtocol('kamino', 0.06, 0),
-      makeMockProtocol('drift', 0.08, 0),
-      makeMockProtocol('jupiter', 0.05, 0),
+      makeMockProtocol('jupiter', 0.08, 0),
     ];
     const allocator = new BaseAllocator(protocols, config);
 
     const total = 10_000;
-    const currentAllocations = new Map([['kamino', 0], ['drift', 0], ['jupiter', 0]]);
+    const currentAllocations = new Map([['kamino', 0], ['jupiter', 0]]);
     const apyRanking = [
-      { protocol: 'drift', apy: 0.08 },
+      { protocol: 'jupiter', apy: 0.08 },
       { protocol: 'kamino', apy: 0.06 },
-      { protocol: 'jupiter', apy: 0.05 },
     ];
 
     const result = allocator.calculateOptimalAllocation(total, currentAllocations, apyRanking);
 
     // 10000 * 5% buffer = 500, deployable = 9500
-    const driftAlloc = result.find(r => r.protocol === 'drift');
-    expect(driftAlloc!.targetBalance).toBe(9_500);
-    expect(driftAlloc!.action).toBe('deposit');
-    expect(driftAlloc!.amount).toBe(9_500);
+    const jupiterAlloc = result.find(r => r.protocol === 'jupiter');
+    expect(jupiterAlloc!.targetBalance).toBe(9_500);
+    expect(jupiterAlloc!.action).toBe('deposit');
+    expect(jupiterAlloc!.amount).toBe(9_500);
 
     // Others should have 0 target
     const kaminoAlloc = result.find(r => r.protocol === 'kamino');
@@ -78,14 +76,14 @@ describe('BaseAllocator.calculateOptimalAllocation', () => {
   it('sticks with current winner when APY diff is below minDiffBps', () => {
     const protocols = [
       makeMockProtocol('kamino', 0.06, 9_500),
-      makeMockProtocol('drift', 0.0605, 0), // only 5bps better, below 50bps threshold
+      makeMockProtocol('jupiter', 0.0605, 0), // only 5bps better, below 50bps threshold
     ];
     const allocator = new BaseAllocator(protocols, config);
 
     const total = 10_000;
-    const currentAllocations = new Map([['kamino', 9_500], ['drift', 0]]);
+    const currentAllocations = new Map([['kamino', 9_500], ['jupiter', 0]]);
     const apyRanking = [
-      { protocol: 'drift', apy: 0.0605 },
+      { protocol: 'jupiter', apy: 0.0605 },
       { protocol: 'kamino', apy: 0.06 },
     ];
 
@@ -96,29 +94,29 @@ describe('BaseAllocator.calculateOptimalAllocation', () => {
     expect(kaminoAlloc!.targetBalance).toBe(9_500);
     expect(kaminoAlloc!.action).toBe('none');
 
-    const driftAlloc = result.find(r => r.protocol === 'drift');
-    expect(driftAlloc!.action).toBe('none');
+    const jupiterAlloc = result.find(r => r.protocol === 'jupiter');
+    expect(jupiterAlloc!.action).toBe('none');
   });
 
   it('switches when APY diff exceeds minDiffBps', () => {
     const protocols = [
       makeMockProtocol('kamino', 0.06, 9_500),
-      makeMockProtocol('drift', 0.07, 0), // 100bps better > 50bps threshold
+      makeMockProtocol('jupiter', 0.07, 0), // 100bps better > 50bps threshold
     ];
     const allocator = new BaseAllocator(protocols, config);
 
     const total = 10_000;
-    const currentAllocations = new Map([['kamino', 9_500], ['drift', 0]]);
+    const currentAllocations = new Map([['kamino', 9_500], ['jupiter', 0]]);
     const apyRanking = [
-      { protocol: 'drift', apy: 0.07 },
+      { protocol: 'jupiter', apy: 0.07 },
       { protocol: 'kamino', apy: 0.06 },
     ];
 
     const result = allocator.calculateOptimalAllocation(total, currentAllocations, apyRanking);
 
-    const driftAlloc = result.find(r => r.protocol === 'drift');
-    expect(driftAlloc!.targetBalance).toBe(9_500);
-    expect(driftAlloc!.action).toBe('deposit');
+    const jupiterAlloc = result.find(r => r.protocol === 'jupiter');
+    expect(jupiterAlloc!.targetBalance).toBe(9_500);
+    expect(jupiterAlloc!.action).toBe('deposit');
 
     const kaminoAlloc = result.find(r => r.protocol === 'kamino');
     expect(kaminoAlloc!.targetBalance).toBe(0);
@@ -162,6 +160,53 @@ describe('BaseAllocator.calculateOptimalAllocation', () => {
     const kaminoAlloc = result.find(r => r.protocol === 'kamino');
     expect(kaminoAlloc!.action).toBe('none');
   });
+
+  it('respects maxProtocolAllocationPct with 2 protocols', () => {
+    const cappedConfig = {
+      ...config,
+      lending: { ...config.lending, maxProtocolAllocationPct: 60 },
+    };
+    const protocols = [
+      makeMockProtocol('kamino', 0.06, 0),
+      makeMockProtocol('jupiter', 0.08, 0),
+    ];
+    const allocator = new BaseAllocator(protocols, cappedConfig);
+
+    const total = 10_000;
+    const currentAllocations = new Map([['kamino', 0], ['jupiter', 0]]);
+    const apyRanking = [
+      { protocol: 'jupiter', apy: 0.08 },
+      { protocol: 'kamino', apy: 0.06 },
+    ];
+
+    const result = allocator.calculateOptimalAllocation(total, currentAllocations, apyRanking);
+
+    // deployable = 9500, maxPerProtocol = 9500 * 0.6 = 5700
+    const jupiterAlloc = result.find(r => r.protocol === 'jupiter');
+    expect(jupiterAlloc!.targetBalance).toBe(5_700);
+
+    const kaminoAlloc = result.find(r => r.protocol === 'kamino');
+    expect(kaminoAlloc!.targetBalance).toBe(3_800); // 9500 - 5700
+  });
+
+  it('caps single protocol when only 1 is available with maxProtocolAllocationPct', () => {
+    const cappedConfig = {
+      ...config,
+      lending: { ...config.lending, maxProtocolAllocationPct: 60 },
+    };
+    const protocols = [makeMockProtocol('kamino', 0.06, 0)];
+    const allocator = new BaseAllocator(protocols, cappedConfig);
+
+    const total = 10_000;
+    const currentAllocations = new Map([['kamino', 0]]);
+    const apyRanking = [{ protocol: 'kamino', apy: 0.06 }];
+
+    const result = allocator.calculateOptimalAllocation(total, currentAllocations, apyRanking);
+
+    // deployable = 9500, maxPerProtocol = 5700
+    const kaminoAlloc = result.find(r => r.protocol === 'kamino');
+    expect(kaminoAlloc!.targetBalance).toBe(5_700);
+  });
 });
 
 // ── getCurrentAllocations ────────────────────────────────
@@ -170,13 +215,13 @@ describe('BaseAllocator.getCurrentAllocations', () => {
   it('returns balances from all protocols', async () => {
     const protocols = [
       makeMockProtocol('kamino', 0.06, 5_000),
-      makeMockProtocol('drift', 0.05, 3_000),
+      makeMockProtocol('jupiter', 0.05, 3_000),
     ];
     const allocator = new BaseAllocator(protocols, config);
 
     const allocations = await allocator.getCurrentAllocations();
     expect(allocations.get('kamino')).toBe(5_000);
-    expect(allocations.get('drift')).toBe(3_000);
+    expect(allocations.get('jupiter')).toBe(3_000);
   });
 
   it('handles protocol errors gracefully', async () => {
@@ -205,14 +250,12 @@ describe('BaseAllocator.getApyRanking', () => {
   it('returns protocols sorted by APY descending', async () => {
     const protocols = [
       makeMockProtocol('kamino', 0.06, 0),
-      makeMockProtocol('drift', 0.08, 0),
       makeMockProtocol('jupiter', 0.05, 0),
     ];
     const allocator = new BaseAllocator(protocols, config);
 
     const ranking = await allocator.getApyRanking();
-    expect(ranking[0]!.protocol).toBe('drift');
-    expect(ranking[1]!.protocol).toBe('kamino');
-    expect(ranking[2]!.protocol).toBe('jupiter');
+    expect(ranking[0]!.protocol).toBe('kamino');
+    expect(ranking[1]!.protocol).toBe('jupiter');
   });
 });

@@ -54,30 +54,24 @@ function alertLevelColor(level: string): string {
 }
 
 const DIMENSION_LABELS: Record<string, string> = {
-  pegStability: 'Peg Stability',
-  liquidityDepth: 'Liquidity',
-  reserveUtilization: 'Reserve Util',
-  tvlProtocol: 'TVL/Protocol',
-  borrowRateVol: 'Borrow Vol',
-  collateralType: 'Coll Type',
+  depegRisk: 'Depeg Risk',
+  liquidationProximity: 'Liquidation',
+  exitLiquidity: 'Exit Liquidity',
+  reservePressure: 'Reserve',
 };
 
 const DIMENSION_WEIGHTS: Record<string, number> = {
-  pegStability: 25,
-  liquidityDepth: 20,
-  reserveUtilization: 20,
-  tvlProtocol: 15,
-  borrowRateVol: 10,
-  collateralType: 10,
+  depegRisk: 30,
+  liquidationProximity: 30,
+  exitLiquidity: 20,
+  reservePressure: 20,
 };
 
 const DIMENSION_DESCRIPTIONS: Record<string, string> = {
-  pegStability: 'Collateral token vs USDC peg deviation. Higher = larger depeg risk.',
-  liquidityDepth: 'On-chain liquidity depth for the collateral token. Higher = thinner liquidity.',
-  reserveUtilization: 'Kamino reserve utilization ratio. Higher = closer to borrow cap, withdrawal risk.',
-  tvlProtocol: 'Protocol TVL relative to position size. Higher = concentration risk.',
-  borrowRateVol: 'Borrow rate volatility over 24h. Higher = unstable cost of leverage.',
-  collateralType: 'Inherent collateral asset risk classification (stablecoin, LST, volatile).',
+  depegRisk: 'Collateral/debt peg deviation + 24h volatility + 7-day tail risk. Higher = larger depeg risk.',
+  liquidationProximity: 'Distance to liquidation at target leverage. Higher = closer to liquidation threshold.',
+  exitLiquidity: 'Slippage on emergency position unwind. Higher = harder to exit.',
+  reservePressure: 'Kamino reserve utilization + capacity + TVL floor. Higher = more protocol stress.',
 };
 
 function RiskDimensionBar({ name, score }: { name: string; score: number }) {
@@ -146,13 +140,14 @@ function RiskDetailPanel({ risk, label }: { risk: RiskAssessmentData; label: str
       </div>
 
       <div className="text-[10px] text-vault-muted/60 border-t border-vault-border/20 pt-2 mt-2 leading-relaxed">
-        <p>Composite = weighted sum of 6 dimensions (click each bar for details). Penalty reduces effective APY. Health Target and Max Position Cap are dynamically adjusted based on score.</p>
+        <p>Composite = weighted sum of 4 dimensions (click each bar for details). Penalty reduces effective APY. Health Target and Max Position Cap are dynamically adjusted based on score.</p>
       </div>
     </div>
   );
 }
 
-function PositionRow({ pos }: { pos: MultiplyPosition }) {
+function PositionRow({ pos, risk }: { pos: MultiplyPosition; risk?: RiskAssessmentData | null }) {
+  const [showRisk, setShowRisk] = useState(false);
   const hColor = healthColor(pos.healthRate, pos.targetHealthRate, pos.alertHealthRate, pos.emergencyHealthRate);
   const hBg = healthBg(pos.healthRate, pos.alertHealthRate, pos.emergencyHealthRate);
 
@@ -165,7 +160,7 @@ function PositionRow({ pos }: { pos: MultiplyPosition }) {
         </div>
         <span className="text-sm font-bold text-vault-text-bright">{formatUsd(pos.balance)}</span>
       </div>
-      <div className="grid grid-cols-3 gap-2 text-xs">
+      <div className="grid grid-cols-4 gap-2 text-xs">
         <div>
           <span className="text-vault-muted">Health</span>
           <div className={`font-bold ${hColor}`}>{formatHealth(pos.healthRate)}</div>
@@ -178,7 +173,24 @@ function PositionRow({ pos }: { pos: MultiplyPosition }) {
           <span className="text-vault-muted">Leverage</span>
           <div className="font-bold text-vault-text-bright">{pos.leverage.toFixed(2)}x</div>
         </div>
+        <div>
+          <span className="text-vault-muted">Risk</span>
+          {risk ? (
+            <div
+              className={`font-bold cursor-pointer hover:underline ${riskScoreColor(risk.compositeScore)}`}
+              onClick={() => setShowRisk((v) => !v)}
+              title="Click to view risk breakdown"
+            >
+              {risk.compositeScore.toFixed(0)}
+            </div>
+          ) : (
+            <div className="font-bold text-vault-muted">-</div>
+          )}
+        </div>
       </div>
+      {showRisk && risk && (
+        <RiskDetailPanel risk={risk} label={pos.label} />
+      )}
     </div>
   );
 }
@@ -202,9 +214,12 @@ export function MultiplyCard() {
             <p className="text-vault-muted text-sm mb-3">No active positions</p>
           ) : (
             <div className="space-y-2 mb-4">
-              {data.positions.map((pos) => (
-                <PositionRow key={pos.label} pos={pos} />
-              ))}
+              {data.positions.map((pos) => {
+                const candidate = data.candidates.find((c) => c.label === pos.label);
+                return (
+                  <PositionRow key={pos.label} pos={pos} risk={candidate?.riskAssessment} />
+                );
+              })}
             </div>
           )}
 

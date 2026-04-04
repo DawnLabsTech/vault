@@ -21,6 +21,7 @@ import type { BinanceWsClient } from '../connectors/binance/ws.js';
 import type { KaminoLoopLending } from '../connectors/defi/kamino-loop.js';
 import type { KaminoMultiplyLending } from '../connectors/defi/kamino-multiply.js';
 import type { MarketScanner } from './market-scanner.js';
+import { ProtocolCircuitBreaker } from '../risk/protocol-circuit-breaker.js';
 
 const log = createChildLogger('orchestrator');
 
@@ -39,6 +40,7 @@ export interface OrchestratorDeps {
   kaminoLoop?: KaminoLoopLending | null;
   kaminoMultiplyAdapters?: KaminoMultiplyLending[];
   marketScanner?: MarketScanner | null;
+  circuitBreaker?: ProtocolCircuitBreaker | null;
 }
 
 interface PersistedState {
@@ -131,6 +133,14 @@ export class Orchestrator {
     this.scheduler.register('health-check', 5_000, async () => {
       await this.healthCheck();
     });
+
+    // Protocol circuit breaker — every 60 seconds
+    if (this.deps.circuitBreaker) {
+      const cbInterval = config.circuitBreaker?.checkIntervalMs ?? 60_000;
+      this.scheduler.register('circuit-breaker', cbInterval, async () => {
+        await this.runCircuitBreaker();
+      });
+    }
 
     // Kamino Loop health monitoring — every 5 minutes
     if (this.deps.kaminoLoop) {
@@ -449,7 +459,7 @@ export class Orchestrator {
       log.warn({ error: (err as Error).message }, 'Failed to get buffer USDC for snapshot');
     }
 
-    // Get perp exchange balances (Binance or Drift)
+    // Get perp exchange balances (Binance)
     let binanceUsdcBalance = 0;
     let binancePerpUnrealizedPnl = 0;
     let binancePerpSize = 0;
@@ -650,9 +660,11 @@ export class Orchestrator {
 
         const cfg = adapter.getMultiplyConfig();
         const label = cfg.label;
+        const config = getConfig();
 
         log.debug({ label, healthRate: health }, 'Kamino Multiply health check');
 
+        // Tier 1: Emergency — full deleverage
         if (health < cfg.emergencyHealthRate) {
           log.error({ label, health, threshold: cfg.emergencyHealthRate }, 'Kamino Multiply health CRITICAL');
           await sendAlert(
@@ -660,7 +672,6 @@ export class Orchestrator {
             'critical',
           );
 
-          const config = getConfig();
           if (!config.general.dryRun) {
             const txSigs = await adapter.emergencyDeleverage();
             for (const txSig of txSigs) {
@@ -678,12 +689,58 @@ export class Orchestrator {
           } else {
             log.info({ label }, 'DRY RUN: Would trigger emergency deleverage');
           }
+
+        // Tier 2: Soft deleverage — reduce position by 20%
         } else if (health < cfg.alertHealthRate) {
-          log.warn({ label, health, threshold: cfg.alertHealthRate }, 'Kamino Multiply health WARNING');
-          await sendAlert(
-            `Kamino Multiply [${label}] health WARNING: ${health.toFixed(3)} (alert: ${cfg.alertHealthRate})`,
-            'warning',
-          );
+          log.warn({ label, health, threshold: cfg.alertHealthRate }, 'Kamino Multiply health WARNING — soft deleverage');
+
+          if (!config.general.dryRun) {
+            const currentBalance = await adapter.getBalance();
+            const reduceAmount = Math.floor(currentBalance * 0.2);
+
+            if (reduceAmount > 1) {
+              await sendAlert(
+                `Kamino Multiply [${label}] soft deleverage: health ${health.toFixed(3)} < ${cfg.alertHealthRate}\nReducing position by 20% ($${reduceAmount})`,
+                'warning',
+              );
+
+              const txSig = await adapter.withdraw(reduceAmount);
+              recordEvent({
+                timestamp: new Date().toISOString(),
+                eventType: EventType.ALERT,
+                amount: reduceAmount,
+                asset: 'USD',
+                txHash: txSig,
+                sourceProtocol: adapter.name,
+                metadata: { action: 'soft_deleverage', healthRate: health, reducePct: 20 },
+              });
+
+              log.info({ label, reduceAmount, txSig }, 'Soft deleverage complete');
+            }
+          } else {
+            log.info({ label }, 'DRY RUN: Would trigger soft deleverage (20% reduction)');
+          }
+
+        // Tier 3: Elevated monitoring — increase poll frequency
+        } else if (health < 1.20) {
+          log.info({ label, health }, 'Health rate below 1.20 — elevated monitoring');
+          // Reduce multiply health check interval to 60s when health is low
+          const task = this.scheduler.getStatus()['kamino-multiply-health'];
+          if (task && task.intervalMs > 60_000) {
+            this.scheduler.register('kamino-multiply-health', 60_000, async () => {
+              await this.checkKaminoMultiplyHealth();
+            });
+            log.info({ label }, 'Multiply health check interval reduced to 60s');
+          }
+        } else {
+          // Health is good — restore normal interval if it was reduced
+          const task = this.scheduler.getStatus()['kamino-multiply-health'];
+          if (task && task.intervalMs < 300_000) {
+            this.scheduler.register('kamino-multiply-health', 300_000, async () => {
+              await this.checkKaminoMultiplyHealth();
+            });
+            log.debug('Multiply health check interval restored to 5min');
+          }
         }
       } catch (err) {
         log.error({ error: (err as Error).message, adapter: adapter.name }, 'Kamino Multiply health check failed');
@@ -859,6 +916,36 @@ export class Orchestrator {
     } catch (err) {
       log.error({ error: (err as Error).message }, 'Multiply market scan/switch failed');
       await sendAlert(`Multiply market scan failed: ${(err as Error).message}`, 'warning');
+    }
+  }
+
+  /**
+   * Run protocol circuit breaker checks.
+   * Events are logged and, if critical, trigger emergency withdrawal.
+   */
+  private async runCircuitBreaker(): Promise<void> {
+    const cb = this.deps.circuitBreaker;
+    if (!cb) return;
+
+    try {
+      const events = await cb.check();
+      for (const event of events) {
+        recordEvent({
+          timestamp: new Date().toISOString(),
+          eventType: EventType.ALERT,
+          amount: 0,
+          asset: 'USDC',
+          sourceProtocol: event.protocol,
+          metadata: {
+            action: 'circuit_breaker',
+            reason: event.reason,
+            severity: event.severity,
+            ...event.data,
+          },
+        });
+      }
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'Circuit breaker check failed');
     }
   }
 

@@ -411,7 +411,14 @@ export class KaminoMultiplyLending implements LendingProtocol {
       const supplyApy = baseSupplyApy + nativeYield + depositRewardApr;
       const borrowApy = baseBorrowApy - borrowRewardApr; // rewards reduce effective borrow cost
 
-      const leverage = await this.getTargetLeverage();
+      // Use actual on-chain leverage if position exists, otherwise target leverage
+      let leverage: number;
+      try {
+        const currentLev = await this.getCurrentLeverage();
+        leverage = currentLev > 1 ? currentLev : await this.getTargetLeverage();
+      } catch {
+        leverage = await this.getTargetLeverage();
+      }
       const effectiveApy = leverage * supplyApy - (leverage - 1) * borrowApy;
 
       log.debug(

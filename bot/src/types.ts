@@ -138,7 +138,7 @@ export interface VaultConfig {
   };
   perp: {
     exchange: PerpExchange;
-    symbol: string;       // 'SOLUSDC' for Binance, 'SOL-PERP' for Drift
+    symbol: string;       // 'SOLUSDC' for Binance
     leverage: number;
     swapSlippageBps: number;
   };
@@ -169,7 +169,11 @@ export interface VaultConfig {
   lending: {
     protocols: string[];
     bufferPct: number; // keep this % liquid for withdrawals
+    maxProtocolAllocationPct?: number; // max % to single protocol (default 100 = no limit)
   };
+  circuitBreaker?: CircuitBreakerConfig;
+  lendingProtocolMeta?: Record<string, LendingProtocolMeta>;
+  lendingRiskScorer?: LendingRiskScorerConfig;
   kaminoLoop?: {
     targetHealthRate: number;   // default 1.15
     liquidationLtv: number;     // default 0.85
@@ -200,18 +204,14 @@ export interface VaultConfig {
 // ── Risk Scoring ──
 
 export interface RiskDimensionScores {
-  /** D1: Peg deviation between collateral and debt (0-100) */
-  pegStability: number;
-  /** D2: Slippage on emergency exit swap (0-100) */
-  liquidityDepth: number;
-  /** D3: Kamino reserve utilization pressure (0-100) */
-  reserveUtilization: number;
-  /** D4: Market TVL / maturity (0-100) */
-  tvlProtocol: number;
-  /** D5: Borrow rate 24h volatility (0-100) */
-  borrowRateVol: number;
-  /** D6: Collateral token age / holder count (0-100) */
-  collateralType: number;
+  /** D1: Collateral/debt peg deviation + volatility + tail risk (0-100) */
+  depegRisk: number;
+  /** D2: Distance to liquidation at target leverage (0-100) */
+  liquidationProximity: number;
+  /** D3: Slippage on emergency exit swap (0-100) */
+  exitLiquidity: number;
+  /** D4: Reserve utilization + capacity + TVL floor (0-100) */
+  reservePressure: number;
 }
 
 export type RiskAlertLevel = 'normal' | 'warning' | 'critical' | 'emergency';
@@ -232,12 +232,10 @@ export interface RiskAssessment {
 
 export interface RiskScorerConfig {
   weights: {
-    pegStability: number;
-    liquidityDepth: number;
-    reserveUtilization: number;
-    tvlProtocol: number;
-    borrowRateVol: number;
-    collateralType: number;
+    depegRisk: number;
+    liquidationProximity: number;
+    exitLiquidity: number;
+    reservePressure: number;
   };
   /** Max peg deviation bps for full score (default 200) */
   maxDeviationBps: number;
@@ -247,8 +245,6 @@ export interface RiskScorerConfig {
   criticalUtilization: number;
   /** TVL in USD below which risk increases linearly (default 10_000_000) */
   tvlSafeThreshold: number;
-  /** Max borrow rate stddev for full score (default 0.05) */
-  maxBorrowVol: number;
   /** Composite score above which candidate is rejected (default 90) */
   rejectThreshold: number;
   /** Composite score above which emergency deleverage triggers (default 85) */
@@ -303,6 +299,47 @@ export interface PriceData {
   sol: number;
   dawnsol: number;
   timestamp: number;
+}
+
+// Lending Protocol Risk Metadata
+export interface LendingProtocolMeta {
+  auditCount: number;
+  ageMonths: number;
+  incidents: number;
+  disabled?: boolean;
+}
+
+// Lending Risk Scorer Config
+export interface LendingRiskScorerConfig {
+  weights: {
+    tvlScale: number;         // D1: TVL size weight (default 0.30)
+    protocolMaturity: number;  // D2: Audit/age/incidents weight (default 0.20)
+    reserveUtilization: number; // D3: Reserve pressure weight (default 0.25)
+    depositConcentration: number; // D4: Self-concentration weight (default 0.15)
+    incidentHistory: number;  // D5: Incident history weight (default 0.10)
+  };
+  /** TVL below this is considered risky (default 50_000_000) */
+  tvlSafeThreshold: number;
+  /** Max risk penalty in APY terms (default 0.03 = 3%) */
+  maxRiskPenalty: number;
+}
+
+// Circuit Breaker Config
+export interface CircuitBreakerConfig {
+  /** Check interval in ms (default 60_000) */
+  checkIntervalMs: number;
+  /** TVL drop percentage threshold to trigger withdrawal (default 20) */
+  tvlDropThresholdPct: number;
+  /** Time window for TVL drop detection in ms (default 3_600_000 = 1h) */
+  tvlDropWindowMs: number;
+  /** Max consecutive failures before disabling protocol (default 3) */
+  maxConsecutiveFailures: number;
+  /** Oracle price deviation in bps to trigger warning (default 50) */
+  oracleDeviationBps: number;
+  /** Oracle deviation in bps to trigger withdrawal (default 100) */
+  oracleDeviationCriticalBps: number;
+  /** Cooldown period after tripping before re-enabling (default 86_400_000 = 24h) */
+  cooldownMs: number;
 }
 
 // Health status

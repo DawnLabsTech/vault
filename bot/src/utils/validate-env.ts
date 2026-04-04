@@ -24,7 +24,7 @@ const ENV_VARS: EnvVar[] = [
   {
     name: 'PERP_EXCHANGE',
     required: false,
-    validate: (v) => ['binance', 'drift'].includes(v.toLowerCase()) ? null : 'Must be "binance" or "drift"',
+    validate: (v) => ['binance'].includes(v.toLowerCase()) ? null : 'Must be "binance"',
   },
   {
     name: 'BINANCE_API_KEY',

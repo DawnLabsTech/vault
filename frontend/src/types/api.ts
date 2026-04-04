@@ -104,12 +104,10 @@ export interface MultiplyPosition {
 }
 
 export interface RiskDimensionScores {
-  pegStability: number;
-  liquidityDepth: number;
-  reserveUtilization: number;
-  tvlProtocol: number;
-  borrowRateVol: number;
-  collateralType: number;
+  depegRisk: number;
+  liquidationProximity: number;
+  exitLiquidity: number;
+  reservePressure: number;
 }
 
 export interface RiskAssessmentData {

@@ -72,7 +72,7 @@ export class FrMonitor {
 
   /**
    * Average annualized FR over the last `days` days.
-   * Records per day depends on exchange (3 for 8h Binance, 24 for 1h Drift).
+   * Records per day depends on exchange (3 for 8h Binance).
    */
   getAverageAnnualized(days: number): number {
     const limit = days * this.periodsPerDay;

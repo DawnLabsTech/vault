@@ -44,7 +44,7 @@ function makeConfig(overrides: { dryRun?: boolean } = {}): VaultConfig {
       positionDivergenceThresholdPct: 3,
     },
     lending: {
-      protocols: ['kamino', 'drift', 'jupiter'],
+      protocols: ['kamino', 'jupiter'],
       bufferPct: 5,
     },
   };
@@ -186,11 +186,11 @@ function buildTestConnectors(overrides: { dryRun?: boolean } = {}): {
   const binanceRest = makeMockBinanceRest();
   const lendingAdapters = [
     makeMockLending('kamino', 1000, 0.05),
-    makeMockLending('drift', 500, 0.04),
+    makeMockLending('jupiter', 500, 0.04),
   ];
   const baseAllocator = makeMockBaseAllocator(
-    new Map([['kamino', 1000], ['drift', 500]]),
-    [{ protocol: 'kamino', apy: 0.05 }, { protocol: 'drift', apy: 0.04 }],
+    new Map([['kamino', 1000], ['jupiter', 500]]),
+    [{ protocol: 'kamino', apy: 0.05 }, { protocol: 'jupiter', apy: 0.04 }],
   );
   const jupiterSwap = makeMockJupiterSwap();
   const txSender = makeMockTxSender();
@@ -303,7 +303,7 @@ describe('DN Connectors — live mode (mocked deps)', () => {
 
   it('withdrawFromLending calls the protocol with largest balance', async () => {
     const tx = await connectors.withdrawFromLending(300);
-    expect(tx).toBe('kamino-withdraw-tx'); // kamino has 1000, drift has 500
+    expect(tx).toBe('kamino-withdraw-tx'); // kamino has 1000, jupiter has 500
     expect(mocks.lendingAdapters[0]!.withdraw).toHaveBeenCalledWith(300);
   });
 
@@ -441,7 +441,7 @@ describe('DN Connectors — live mode (mocked deps)', () => {
 
   it('depositToLending uses highest APY protocol', async () => {
     const tx = await connectors.depositToLending(1500);
-    expect(tx).toBe('kamino-deposit-tx'); // kamino has 0.05 APY > drift 0.04
+    expect(tx).toBe('kamino-deposit-tx'); // kamino has 0.05 APY > jupiter 0.04
     expect(mocks.lendingAdapters[0]!.deposit).toHaveBeenCalledWith(1500);
   });
 

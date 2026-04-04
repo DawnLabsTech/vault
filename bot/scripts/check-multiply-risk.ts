@@ -43,18 +43,15 @@ const CANDIDATES: MultiplyCandidate[] = [
 
 const RISK_CONFIG: RiskScorerConfig = {
   weights: {
-    pegStability: 0.25,
-    liquidityDepth: 0.20,
-    reserveUtilization: 0.20,
-    tvlProtocol: 0.15,
-    borrowRateVol: 0.10,
-    collateralType: 0.10,
+    depegRisk: 0.30,
+    liquidationProximity: 0.30,
+    exitLiquidity: 0.20,
+    reservePressure: 0.20,
   },
   maxDeviationBps: 200,
   maxSlippageBps: 100,
   criticalUtilization: 0.90,
   tvlSafeThreshold: 10_000_000,
-  maxBorrowVol: 0.05,
   rejectThreshold: 90,
   emergencyThreshold: 85,
   emaSmoothingAlpha: 0.3,
@@ -83,12 +80,10 @@ async function main() {
       console.log(`  Alert Level:     ${assessment.alertLevel}`);
       console.log('');
       console.log('  Dimensions:');
-      console.log(`    D1 Peg Stability:      ${d.pegStability.toFixed(1)} (weight 25%)`);
-      console.log(`    D2 Liquidity Depth:    ${d.liquidityDepth.toFixed(1)} (weight 20%)`);
-      console.log(`    D3 Reserve Util:       ${d.reserveUtilization.toFixed(1)} (weight 20%)`);
-      console.log(`    D4 TVL/Protocol:       ${d.tvlProtocol.toFixed(1)} (weight 15%)`);
-      console.log(`    D5 Borrow Rate Vol:    ${d.borrowRateVol.toFixed(1)} (weight 10%)`);
-      console.log(`    D6 Collateral Type:    ${d.collateralType.toFixed(1)} (weight 10%)`);
+      console.log(`    D1 Depeg Risk:             ${d.depegRisk.toFixed(1)} (weight 30%)`);
+      console.log(`    D2 Liquidation Proximity:  ${d.liquidationProximity.toFixed(1)} (weight 30%)`);
+      console.log(`    D3 Exit Liquidity:         ${d.exitLiquidity.toFixed(1)} (weight 20%)`);
+      console.log(`    D4 Reserve Pressure:       ${d.reservePressure.toFixed(1)} (weight 20%)`);
       console.log('');
       console.log('  Derived Parameters:');
       console.log(`    Risk Penalty:          ${(assessment.riskPenalty * 100).toFixed(2)}%`);

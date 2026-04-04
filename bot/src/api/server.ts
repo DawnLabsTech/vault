@@ -248,12 +248,10 @@ export class ApiServer {
       riskAssessment: {
         compositeScore: number;
         dimensions: {
-          pegStability: number;
-          liquidityDepth: number;
-          reserveUtilization: number;
-          tvlProtocol: number;
-          borrowRateVol: number;
-          collateralType: number;
+          depegRisk: number;
+          liquidationProximity: number;
+          exitLiquidity: number;
+          reservePressure: number;
         };
         riskPenalty: number;
         targetHealthRate: number;
@@ -287,11 +285,13 @@ export class ApiServer {
       }
     }
 
+    const positionApyMap = new Map(positions.map((p) => [p.label, p.effectiveApy]));
     const activeLabels = new Set(positions.map((p) => p.label));
     const scannerData = this.marketScanner?.getLatestScans() ?? [];
     const candidates = scannerData.map((s) => ({
       label: s.label,
-      effectiveApy: s.effectiveApy,
+      // Use live position APY for active positions to avoid stale scanner cache mismatch
+      effectiveApy: positionApyMap.get(s.label) ?? s.effectiveApy,
       adjustedApy: s.adjustedApy,
       movingAvg: s.movingAvg,
       riskTier: 0, // filled below

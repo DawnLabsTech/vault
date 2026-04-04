@@ -132,8 +132,16 @@ export class RiskManager {
   /**
    * Continuous monitoring: check portfolio health and return alerts/actions.
    * Called on each tick.
+   *
+   * @param extras - optional extra signals (SOL balance, price freshness)
    */
-  continuousMonitor(portfolio: PortfolioSnapshot): {
+  continuousMonitor(
+    portfolio: PortfolioSnapshot,
+    extras?: {
+      walletSolBalance?: number;
+      priceDataAgeMs?: number;
+    },
+  ): {
     alerts: Alert[];
     actions: Action[];
   } {
@@ -208,6 +216,24 @@ export class RiskManager {
           timestamp: now,
         });
       }
+    }
+
+    // 4. SOL balance check — tx fees need SOL
+    if (extras?.walletSolBalance !== undefined && extras.walletSolBalance < 0.05) {
+      alerts.push({
+        level: extras.walletSolBalance < 0.01 ? 'critical' : 'warning',
+        message: `Wallet SOL balance critically low: ${round(extras.walletSolBalance, 4)} SOL — transactions may fail`,
+        timestamp: now,
+      });
+    }
+
+    // 5. Price data freshness — stale data may lead to bad decisions
+    if (extras?.priceDataAgeMs !== undefined && extras.priceDataAgeMs > 300_000) {
+      alerts.push({
+        level: extras.priceDataAgeMs > 600_000 ? 'critical' : 'warning',
+        message: `Price data is stale: ${round(extras.priceDataAgeMs / 60_000, 1)} minutes old`,
+        timestamp: now,
+      });
     }
 
     if (alerts.length > 0) {
