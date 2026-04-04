@@ -195,6 +195,33 @@ Evaluated Hyperliquid SOL Perp as an alternative short leg for the DN strategy. 
 
 `getDepositWithLeverageIxs` exceeds transaction size limits (flash loan + swap). Implemented manual loop approach (`deposit -> borrow -> swap -> re-deposit`) as a workaround. Jito bundle support is a future improvement.
 
+## Test Coverage
+
+220 tests across 19 test files. Run with `cd bot && npm test`.
+
+| Category | Module | Tests | What's Verified |
+|---|---|---|---|
+| **Core** | State Machine | 20 | BASE_ONLY ↔ BASE_DN transitions, FR threshold gates, emergency exit priority, force override, operation lock, allocation cap |
+| | Orchestrator | 2 | State evaluation loop, action dispatch |
+| | FR Monitor | 25 | Consecutive-day counting, partial-day exclusion, SQLite persistence, threshold queries |
+| | Market Scanner | 15 | APY scanning, 24h moving average, switch recommendation with payback economics, capacity filtering, risk score gating, SQLite history, graceful failure (Promise.allSettled) |
+| | Switch Economics | 3 | Payback window calculation, cost/gain comparison, min net gain buffer |
+| | Multiply Risk Policy | 4 | Score-based trim/exit rules, health + risk dual control, emergency deleverage |
+| **Risk** | Guardrails | 18 | Kill switch, daily loss limit (2%), position cap, transfer size limit, SOL balance, price freshness, position divergence |
+| | Risk Manager | 14 | Continuous monitoring, alert escalation, pre-trade checks |
+| | Multiply Risk Scorer | 4 | Jupiter price integration, fallback to lite-api, neutral-price fallback, ONyc reference rate depeg |
+| | Lending Risk Scorer | 8 | 5-dimension scoring (TVL, maturity, utilization, concentration, incidents), APY penalty |
+| | Protocol Circuit Breaker | 9 | TVL crash detection, consecutive failures, oracle deviation, cooldown, re-enable |
+| **Strategies** | DN Executor | 47 | Multi-step entry/exit state machine, parallel leg execution, error recovery, resume from partial failure, step ordering |
+| | Capital Allocator | 11 | Multiply-first allocation, health/risk blocking, lending overflow, buffer preservation |
+| | Base Allocator | 11 | APY-ranked protocol selection, max protocol cap (60%), rebalance hysteresis, diversification |
+| **Connectors** | DN Connectors | 30 | Mock interface for exchange + protocol operations |
+| | Kamino Lending | 2 | Balance parsing, APY query |
+| | Kamino Multiply | 2 | Leverage position query |
+| **Measurement** | PnL | 3 | External flow detection, deposit exclusion from returns, internal rebalance filtering |
+| **Utils** | Math | 14 | FR ↔ annualized conversion, Sharpe ratio, max drawdown, Big.js rounding |
+| | Retry | 7 | Exponential backoff, max attempts, jitter, immediate success/failure |
+
 ## Development
 
 ```bash
