@@ -28,8 +28,10 @@ import type {
 
 const log = createChildLogger('multiply-risk-scorer');
 
-const JUPITER_PRICE_API = 'https://api.jup.ag/price/v2';
-const JUPITER_QUOTE_API = 'https://api.jup.ag/swap/v1/quote';
+const JUPITER_PRO_API_BASE = 'https://api.jup.ag';
+const JUPITER_LITE_API_BASE = 'https://lite-api.jup.ag';
+const JUPITER_PRICE_API_PATH = '/price/v3';
+const JUPITER_QUOTE_API_PATH = '/swap/v1/quote';
 
 // Well-known stablecoin mints
 const STABLECOIN_MINTS = new Set([
@@ -44,6 +46,34 @@ const STABLECOIN_MINTS = new Set([
 /** Clamp value to [0, 100] */
 function clamp(v: number): number {
   return Math.max(0, Math.min(100, v));
+}
+
+function trimTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, '');
+}
+
+function getJupiterApiBaseCandidates(): string[] {
+  const configuredBaseUrl = process.env.JUPITER_API_BASE_URL?.trim();
+  if (configuredBaseUrl) {
+    return [trimTrailingSlash(configuredBaseUrl)];
+  }
+
+  return process.env.JUPITER_API_KEY
+    ? [JUPITER_PRO_API_BASE, JUPITER_LITE_API_BASE]
+    : [JUPITER_LITE_API_BASE, JUPITER_PRO_API_BASE];
+}
+
+function getJupiterHeaders(baseUrl: string): HeadersInit | undefined {
+  const apiKey = process.env.JUPITER_API_KEY?.trim();
+  if (!apiKey) return undefined;
+  if (trimTrailingSlash(baseUrl) !== JUPITER_PRO_API_BASE) return undefined;
+  return { 'x-api-key': apiKey };
+}
+
+function parseJupiterUsdPrice(value: unknown): number {
+  if (!value || typeof value !== 'object') return 0;
+  const entry = value as { usdPrice?: number | string; price?: number | string };
+  return parseFloat(String(entry.usdPrice ?? entry.price ?? '0'));
 }
 
 /** Standard deviation of an array of numbers */
@@ -235,7 +265,10 @@ export class MultiplyRiskScorer {
     maxPositionCapUsd: number,
   ): Promise<RiskDimensionScores> {
     // Fetch prices once, shared by D1 (depegRisk) and D2 (liquidationProximity)
-    const prices = await this.fetchPrices(candidate.collToken, candidate.debtToken);
+    const prices = await this.fetchPrices(candidate.collToken, candidate.debtToken).catch((err) => {
+      log.warn({ label: candidate.label, error: (err as Error).message }, 'Shared Jupiter price fetch failed');
+      return { collPrice: 0, debtPrice: 0 };
+    });
 
     const [depegRisk, liquidationProximity, exitLiquidity, reservePressure] =
       await Promise.all([
@@ -262,12 +295,13 @@ export class MultiplyRiskScorer {
 
   /** Fetch collateral and debt prices from Jupiter (shared by D1 and D2) */
   private async fetchPrices(collToken: string, debtToken: string): Promise<{ collPrice: number; debtPrice: number }> {
-    const res = await fetch(`${JUPITER_PRICE_API}?ids=${collToken},${debtToken}`);
-    if (!res.ok) throw new Error(`Jupiter price API ${res.status}`);
-    const data = (await res.json()) as any;
+    const data = await this.fetchJupiterJson<Record<string, unknown>>(
+      JUPITER_PRICE_API_PATH,
+      new URLSearchParams({ ids: `${collToken},${debtToken}` }),
+    );
 
-    const collPrice = parseFloat(data.data?.[collToken]?.price ?? '0');
-    const debtPrice = parseFloat(data.data?.[debtToken]?.price ?? '0');
+    const collPrice = parseJupiterUsdPrice(data[collToken]);
+    const debtPrice = parseJupiterUsdPrice(data[debtToken]);
     return { collPrice, debtPrice };
   }
 
@@ -404,9 +438,7 @@ export class MultiplyRiskScorer {
       slippageBps: '300', // max slippage tolerance
     });
 
-    const res = await fetch(`${JUPITER_QUOTE_API}?${params}`);
-    if (!res.ok) throw new Error(`Jupiter quote API ${res.status}`);
-    const quote = (await res.json()) as any;
+    const quote = await this.fetchJupiterJson<any>(JUPITER_QUOTE_API_PATH, params);
 
     const priceImpactPct = parseFloat(quote.priceImpactPct ?? '0');
     const slippageBps = Math.abs(priceImpactPct) * 100;
@@ -554,13 +586,39 @@ export class MultiplyRiskScorer {
   private async getTokenPriceUsd(mint: string): Promise<number> {
     if (STABLECOIN_MINTS.has(mint)) return 1;
     try {
-      const res = await fetch(`${JUPITER_PRICE_API}?ids=${mint}`);
-      if (!res.ok) return 1;
-      const data = (await res.json()) as any;
-      return parseFloat(data.data?.[mint]?.price ?? '1');
+      const data = await this.fetchJupiterJson<Record<string, unknown>>(
+        JUPITER_PRICE_API_PATH,
+        new URLSearchParams({ ids: mint }),
+      );
+      return parseJupiterUsdPrice(data[mint]) || 1;
     } catch {
       return 1;
     }
+  }
+
+  private async fetchJupiterJson<T>(path: string, params: URLSearchParams): Promise<T> {
+    const baseUrls = getJupiterApiBaseCandidates();
+    let lastError: Error | null = null;
+
+    for (const baseUrl of baseUrls) {
+      try {
+        const response = await fetch(`${baseUrl}${path}?${params.toString()}`, {
+          headers: getJupiterHeaders(baseUrl),
+        });
+        if (response.ok) {
+          return await response.json() as T;
+        }
+
+        lastError = new Error(`Jupiter ${path} ${response.status} via ${baseUrl}`);
+        if (response.status >= 400 && response.status < 500 && ![401, 403, 404].includes(response.status)) {
+          break;
+        }
+      } catch (err) {
+        lastError = err as Error;
+      }
+    }
+
+    throw lastError ?? new Error(`Jupiter ${path} request failed`);
   }
 
   /** Get 24h peg deviation volatility from stored data */
