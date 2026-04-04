@@ -25,6 +25,7 @@ export function AllocationChart() {
   const total = s.totalNavUsdc || 1;
   const segments = [
     { label: 'Lending', value: s.lendingBalance, color: '#00ff88' },
+    { label: 'Multiply', value: s.multiplyBalance ?? 0, color: '#aa88ff' },
     { label: 'dawnSOL', value: s.dawnsolUsdcValue, color: '#00bbff' },
     { label: `${perpExchange} USDC`, value: s.binanceUsdcBalance, color: '#ffaa00' },
     { label: 'PERP (abs)', value: Math.abs(s.binancePerpSize), color: '#ff4444' },

@@ -410,13 +410,31 @@ export class Orchestrator {
     const config = getConfig();
     const prices = await getPrices();
 
-    // Get lending balances
+    // Get lending balances (pure lending only — no multiply)
     const lendingAllocations = await this.deps.baseAllocator.getCurrentAllocations();
     let lendingTotal = 0;
     const lendingBreakdown: Record<string, number> = {};
     for (const [protocol, balance] of lendingAllocations) {
       lendingBreakdown[protocol] = balance;
       lendingTotal += balance;
+    }
+
+    // Get multiply balances (separate from lending)
+    let multiplyTotal = 0;
+    const multiplyBreakdown: Record<string, number> = {};
+    if (this.deps.kaminoMultiplyAdapters) {
+      const results = await Promise.allSettled(
+        this.deps.kaminoMultiplyAdapters.map(async (adapter) => {
+          const balance = await adapter.getBalance();
+          return { label: adapter.getMultiplyConfig().label, balance };
+        }),
+      );
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          multiplyBreakdown[result.value.label] = result.value.balance;
+          multiplyTotal += result.value.balance;
+        }
+      }
     }
 
     // Get wallet USDC buffer balance
@@ -460,13 +478,15 @@ export class Orchestrator {
     const dawnsolBalance = dnState.dawnsolAmount;
     const dawnsolUsdcValue = dawnsolBalance * prices.dawnsol;
 
-    const totalNavUsdc = lendingTotal + bufferUsdcBalance + binanceUsdcBalance + dawnsolUsdcValue + binancePerpUnrealizedPnl;
+    const totalNavUsdc = lendingTotal + multiplyTotal + bufferUsdcBalance + binanceUsdcBalance + dawnsolUsdcValue + binancePerpUnrealizedPnl;
 
     return {
       timestamp: new Date().toISOString(),
       totalNavUsdc,
       lendingBalance: lendingTotal,
       lendingBreakdown,
+      multiplyBalance: multiplyTotal,
+      multiplyBreakdown,
       bufferUsdcBalance,
       dawnsolBalance,
       dawnsolUsdcValue,

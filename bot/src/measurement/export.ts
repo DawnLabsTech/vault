@@ -62,6 +62,7 @@ export function exportSnapshotsCsv(from: string, to: string): string {
   const snapshots = getSnapshots({ from: `${from}T00:00:00.000Z`, to: `${to}T23:59:59.999Z` });
   const headers = [
     'timestamp', 'total_nav_usdc', 'lending_balance', 'lending_breakdown',
+    'multiply_balance', 'multiply_breakdown',
     'dawnsol_balance', 'dawnsol_usdc_value', 'binance_usdc_balance',
     'buffer_usdc_balance', 'binance_perp_unrealized_pnl', 'binance_perp_size',
     'state', 'sol_price', 'dawnsol_price',
@@ -72,6 +73,7 @@ export function exportSnapshotsCsv(from: string, to: string): string {
     lines.push(toCsvRow([
       s.timestamp, s.totalNavUsdc, s.lendingBalance,
       JSON.stringify(s.lendingBreakdown),
+      s.multiplyBalance, JSON.stringify(s.multiplyBreakdown),
       s.dawnsolBalance, s.dawnsolUsdcValue, s.binanceUsdcBalance,
       s.bufferUsdcBalance, s.binancePerpUnrealizedPnl, s.binancePerpSize, s.state,
       s.solPrice, s.dawnsolPrice,

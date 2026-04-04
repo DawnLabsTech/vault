@@ -445,6 +445,7 @@ export class ApiServer {
         document.getElementById('portfolio-content').innerHTML =
           '<div class="metric"><span class="label">Total NAV</span><span class="value">$' + fmt(s.totalNavUsdc) + '</span></div>' +
           '<div class="metric"><span class="label">Lending</span><span class="value">$' + fmt(s.lendingBalance) + '</span></div>' +
+          '<div class="metric"><span class="label">Multiply</span><span class="value">$' + fmt(s.multiplyBalance) + '</span></div>' +
           '<div class="metric"><span class="label">dawnSOL</span><span class="value">' + fmt(s.dawnsolBalance, 4) + ' ($' + fmt(s.dawnsolUsdcValue) + ')</span></div>' +
           '<div class="metric"><span class="label">Binance USDC</span><span class="value">$' + fmt(s.binanceUsdcBalance) + '</span></div>' +
           '<div class="metric"><span class="label">PERP PnL</span><span class="value ' + pctClass(s.binancePerpUnrealizedPnl) + '">$' + fmt(s.binancePerpUnrealizedPnl) + '</span></div>';

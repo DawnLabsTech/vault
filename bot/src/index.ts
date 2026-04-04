@@ -71,20 +71,7 @@ async function main(): Promise<void> {
     const wallet = loadWalletFromEnv();
     walletAddress = walletAddress || wallet.publicKey;
 
-    // Initialize Kamino Multiply adapters from config
-    const multiplyConfigs = config.kaminoMultiply ?? [];
-    const multiplyByLabel = new Map(multiplyConfigs.map((c) => [`kamino-multiply:${c.label}`, c]));
-
     for (const protocol of config.lending.protocols) {
-      if (protocol.startsWith('kamino-multiply:')) {
-        const mc = multiplyByLabel.get(protocol);
-        if (mc) {
-          lendingAdapters.push(new KaminoMultiplyLending(walletAddress, mc, rpcUrl, wallet.secretKey));
-        } else {
-          log.warn({ protocol }, 'No matching kaminoMultiply config found, skipping');
-        }
-        continue;
-      }
       switch (protocol) {
         case 'kamino':
           lendingAdapters.push(new KaminoLending(walletAddress, rpcUrl, wallet.secretKey));
@@ -109,14 +96,7 @@ async function main(): Promise<void> {
       'Wallet not available — lending adapters in read-only mode',
     );
     // Initialize adapters without signing (getApy/getBalance still work)
-    const multiplyConfigs = config.kaminoMultiply ?? [];
-    const multiplyByLabel = new Map(multiplyConfigs.map((c) => [`kamino-multiply:${c.label}`, c]));
     for (const protocol of config.lending.protocols) {
-      if (protocol.startsWith('kamino-multiply:')) {
-        const mc = multiplyByLabel.get(protocol);
-        if (mc) lendingAdapters.push(new KaminoMultiplyLending(walletAddress, mc));
-        continue;
-      }
       switch (protocol) {
         case 'kamino': lendingAdapters.push(new KaminoLending(walletAddress)); break;
         case 'kamino-loop': lendingAdapters.push(new KaminoLoopLending(walletAddress)); break;
@@ -178,10 +158,23 @@ async function main(): Promise<void> {
     | import('./connectors/defi/kamino-loop.js').KaminoLoopLending
     | undefined;
 
-  // Find KaminoMultiply adapters for health monitoring + reward claiming
-  const kaminoMultiplyAdapters = lendingAdapters.filter(
-    (a) => a.name.startsWith('kamino-multiply:'),
-  ) as import('./connectors/defi/kamino-multiply.js').KaminoMultiplyLending[];
+  // Initialize KaminoMultiply adapters directly from kaminoMultiply config (separate from lending)
+  const multiplyConfigs = config.kaminoMultiply ?? [];
+  const kaminoMultiplyAdapters: KaminoMultiplyLending[] = [];
+  for (const mc of multiplyConfigs) {
+    try {
+      const wallet = loadWalletFromEnv();
+      kaminoMultiplyAdapters.push(new KaminoMultiplyLending(walletAddress, mc, rpcUrl, wallet.secretKey));
+    } catch {
+      kaminoMultiplyAdapters.push(new KaminoMultiplyLending(walletAddress, mc));
+    }
+  }
+  if (kaminoMultiplyAdapters.length > 0) {
+    log.info(
+      { count: kaminoMultiplyAdapters.length, labels: kaminoMultiplyAdapters.map((a) => a.getMultiplyConfig().label) },
+      'Multiply adapters initialized',
+    );
+  }
 
   // Initialize Market Scanner for multiply market rebalancing
   let marketScanner: MarketScanner | null = null;

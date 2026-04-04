@@ -38,7 +38,7 @@
     "positionDivergenceThresholdPct": 3
   },
   "lending": {
-    "protocols": ["kamino", "jupiter", "kamino-multiply:ONyc/USDC"],
+    "protocols": ["kamino", "jupiter"],
     "bufferPct": 5
   },
   "kaminoMultiply": [
