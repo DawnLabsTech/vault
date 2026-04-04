@@ -5,8 +5,8 @@ const log = createChildLogger('env');
 
 export function getPerpExchange(): PerpExchange {
   const val = (process.env.PERP_EXCHANGE || 'binance').toLowerCase();
-  if (val !== 'binance' && val !== 'drift') {
-    throw new Error(`PERP_EXCHANGE must be "binance" or "drift", got "${val}"`);
+  if (val !== 'binance') {
+    throw new Error(`PERP_EXCHANGE must be "binance", got "${val}"`);
   }
   return val;
 }

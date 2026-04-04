@@ -41,6 +41,7 @@ export interface PerformanceSummary {
   maxDrawdown: number;
   totalDays: number;
   realizedPnl: number;
+  unrealizedPnl: number;
   totalFees: number;
 }
 
@@ -81,6 +82,52 @@ export interface FundingRateData {
 export interface ApysResponse {
   lending: { protocol: string; apy: number }[];
   dawnsolApy: number;
+}
+
+// /api/multiply response
+export interface MultiplyResponse {
+  positions: MultiplyPosition[];
+  candidates: MultiplyMarketCandidate[];
+}
+
+export interface MultiplyPosition {
+  label: string;
+  balance: number;
+  healthRate: number;
+  effectiveApy: number;
+  leverage: number;
+  targetHealthRate: number;
+  alertHealthRate: number;
+  emergencyHealthRate: number;
+}
+
+export interface RiskDimensionScores {
+  pegStability: number;
+  liquidityDepth: number;
+  reserveUtilization: number;
+  tvlProtocol: number;
+  borrowRateVol: number;
+  collateralType: number;
+}
+
+export interface RiskAssessmentData {
+  compositeScore: number;
+  dimensions: RiskDimensionScores;
+  riskPenalty: number;
+  targetHealthRate: number;
+  maxPositionCap: number;
+  alertLevel: 'normal' | 'warning' | 'critical' | 'emergency';
+}
+
+export interface MultiplyMarketCandidate {
+  label: string;
+  effectiveApy: number;
+  adjustedApy: number;
+  movingAvg: number | null;
+  riskTier: number;
+  active: boolean;
+  capacity: { remaining: number; utilizationRatio: number } | null;
+  riskAssessment: RiskAssessmentData | null;
 }
 
 // /api/events response item

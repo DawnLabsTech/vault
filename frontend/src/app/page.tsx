@@ -5,6 +5,7 @@ import { BotStatusCard } from '@/components/cards/BotStatusCard';
 import { PortfolioCard } from '@/components/cards/PortfolioCard';
 import { PerformanceCard } from '@/components/cards/PerformanceCard';
 import { LendingCard } from '@/components/cards/LendingCard';
+import { MultiplyCard } from '@/components/cards/MultiplyCard';
 import { PnlChart } from '@/components/charts/PnlChart';
 import { FrChart } from '@/components/charts/FrChart';
 import { AllocationChart } from '@/components/charts/AllocationChart';
@@ -38,8 +39,9 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Lending */}
-      <div className="mb-4">
+      {/* Lending & Multiply */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+        <MultiplyCard />
         <LendingCard />
       </div>
 

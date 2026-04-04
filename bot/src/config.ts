@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { watch } from 'chokidar';
-import type { PerpExchange, VaultConfig } from './types.js';
+import type { PerpExchange, VaultConfig, MultiplyRebalanceConfig } from './types.js';
 
 const CONFIG_DIR = join(process.cwd(), 'config');
 const CONFIG_PATH = join(CONFIG_DIR, 'default.json');
@@ -48,8 +48,17 @@ const DEFAULT_CONFIG: VaultConfig = {
     positionDivergenceThresholdPct: 3,
   },
   lending: {
-    protocols: ['kamino', 'drift', 'jupiter'],
+    protocols: ['kamino', 'jupiter'],
     bufferPct: 5,
+  },
+  multiplyRebalance: {
+    minDiffBps: 100,
+    minHoldingDays: 3,
+    scanIntervalMs: 21_600_000, // 6h
+    riskPenalty: [0, 0.005, 0.015],
+    defaultTargetHealthRate: 1.15,
+    defaultAlertHealthRate: 1.10,
+    defaultEmergencyHealthRate: 1.05,
   },
 };
 
@@ -97,11 +106,8 @@ class ConfigManager extends EventEmitter {
   private applyEnvOverrides(config: VaultConfig): VaultConfig {
     if (process.env.PERP_EXCHANGE) {
       const exchange = process.env.PERP_EXCHANGE.toLowerCase() as PerpExchange;
-      if (exchange === 'binance' || exchange === 'drift') {
+      if (exchange === 'binance') {
         config.perp.exchange = exchange;
-        if (exchange === 'drift') {
-          config.perp.symbol = 'SOL-PERP';
-        }
       }
     }
     return config;
@@ -116,6 +122,10 @@ class ConfigManager extends EventEmitter {
       thresholds: { ...defaults.thresholds, ...overrides.thresholds },
       risk: { ...defaults.risk, ...overrides.risk },
       lending: { ...defaults.lending, ...overrides.lending },
+      kaminoLoop: overrides.kaminoLoop ?? defaults.kaminoLoop,
+      kaminoMultiply: overrides.kaminoMultiply ?? defaults.kaminoMultiply,
+      kaminoMultiplyCandidates: overrides.kaminoMultiplyCandidates ?? defaults.kaminoMultiplyCandidates,
+      multiplyRebalance: { ...defaults.multiplyRebalance!, ...overrides.multiplyRebalance },
     };
   }
 

@@ -38,7 +38,74 @@
     "positionDivergenceThresholdPct": 3
   },
   "lending": {
-    "protocols": ["kamino", "drift", "jupiter"],
+    "protocols": ["kamino", "jupiter", "kamino-multiply:ONyc/USDC"],
     "bufferPct": 5
+  },
+  "kaminoMultiply": [
+    {
+      "market": "47tfyEG9SsdEnUm9cw5kY9BXngQGqu3LBoop9j5uTAv8",
+      "collToken": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+      "debtToken": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "label": "ONyc/USDC",
+      "targetHealthRate": 1.15,
+      "alertHealthRate": 1.10,
+      "emergencyHealthRate": 1.05,
+      "collDecimals": 9,
+      "debtDecimals": 6,
+      "collNativeYield": 0.045,
+      "claimRewards": true,
+      "inputToken": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "inputDecimals": 6
+    }
+  ],
+  "kaminoMultiplyCandidates": [
+    {
+      "market": "47tfyEG9SsdEnUm9cw5kY9BXngQGqu3LBoop9j5uTAv8",
+      "collToken": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+      "debtToken": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "label": "ONyc/USDC",
+      "riskTier": 2,
+      "collDecimals": 9,
+      "collNativeYield": 0.045,
+      "minTvlUsdc": 500000
+    },
+    {
+      "market": "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF",
+      "collToken": "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH",
+      "debtToken": "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
+      "label": "USDG/PYUSD",
+      "riskTier": 1,
+      "collNativeYield": 0,
+      "minTvlUsdc": 1000000,
+      "inputToken": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "inputDecimals": 6
+    }
+  ],
+  "multiplyRebalance": {
+    "minDiffBps": 100,
+    "minHoldingDays": 3,
+    "scanIntervalMs": 21600000,
+    "riskPenalty": [0, 0.005, 0.015],
+    "defaultTargetHealthRate": 1.15,
+    "defaultAlertHealthRate": 1.10,
+    "defaultEmergencyHealthRate": 1.05
+  },
+  "riskScorer": {
+    "weights": {
+      "pegStability": 0.25,
+      "liquidityDepth": 0.20,
+      "reserveUtilization": 0.20,
+      "tvlProtocol": 0.15,
+      "borrowRateVol": 0.10,
+      "collateralType": 0.10
+    },
+    "maxDeviationBps": 200,
+    "maxSlippageBps": 100,
+    "criticalUtilization": 0.90,
+    "tvlSafeThreshold": 10000000,
+    "maxBorrowVol": 0.05,
+    "rejectThreshold": 90,
+    "emergencyThreshold": 85,
+    "emaSmoothingAlpha": 0.3
   }
 }

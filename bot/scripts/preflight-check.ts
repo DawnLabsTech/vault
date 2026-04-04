@@ -13,10 +13,8 @@ import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { getAssociatedTokenAddressSync } from '@solana/spl-token';
 import { loadWalletFromEnv } from '../src/connectors/solana/wallet.js';
 import { KaminoLending } from '../src/connectors/defi/kamino.js';
-import { DriftLending } from '../src/connectors/defi/drift.js';
 import { JupiterLending } from '../src/connectors/defi/jupiter-lend.js';
 import { BinanceRestClient } from '../src/connectors/binance/rest.js';
-import { DriftPerp } from '../src/connectors/drift/perp.js';
 import { sendAlert } from '../src/utils/notify.js';
 
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
@@ -45,7 +43,6 @@ async function checkLendingApys(walletAddress: string, rpcUrl: string, secretKey
 
   const protocols = [
     new KaminoLending(walletAddress, rpcUrl, secretKey),
-    new DriftLending(walletAddress, rpcUrl, secretKey),
     new JupiterLending(walletAddress, rpcUrl, secretKey),
   ];
 
@@ -140,54 +137,12 @@ async function main() {
   }
 
   // 6. Perp exchange check
-  const perpExchange = process.env.PERP_EXCHANGE || 'binance';
-  console.log(`\n  PERP_EXCHANGE: ${perpExchange}`);
-
-  if (perpExchange === 'drift') {
-    await checkDrift(walletAddress, rpcUrl, wallet.secretKey);
-  } else {
-    await checkBinance();
-  }
+  await checkBinance();
 
   // 7. Telegram notification check
   await checkTelegram();
 
   console.log('\n✅ Pre-flight check complete');
-}
-
-async function checkDrift(walletAddress: string, rpcUrl: string, secretKey: Uint8Array) {
-  console.log('\n=== Drift Perp ===');
-  const network = (process.env.DRIFT_NETWORK as 'mainnet-beta' | 'devnet') || 'mainnet-beta';
-  const drift = new DriftPerp(rpcUrl, secretKey, walletAddress, network);
-
-  try {
-    // USDC balance
-    const balance = await drift.getUsdcBalance();
-    console.log(`  USDC Balance: ${balance.toFixed(2)}`);
-
-    // Oracle price
-    const price = await drift.getSolPrice();
-    console.log(`  SOL Oracle Price: $${price.toFixed(2)}`);
-
-    // Funding rate
-    const fr = await drift.getFundingRate();
-    const annualized = fr * 24 * 365 * 100;
-    console.log(`  FR (SOL-PERP): ${(fr * 100).toFixed(6)}% (annualized ${annualized.toFixed(1)}%)`);
-
-    // Position
-    const pos = await drift.getPosition();
-    if (pos.size === 0) {
-      console.log('  Position: none (clean)');
-    } else {
-      console.log(`  Position: ${pos.size.toFixed(4)} SOL @ $${pos.entryPrice.toFixed(2)}, PnL: $${pos.unrealizedPnl.toFixed(2)}`);
-    }
-
-    console.log('  ✅ Drift checks passed');
-  } catch (err) {
-    console.log(`  ❌ Drift check failed: ${(err as Error).message}`);
-  } finally {
-    await drift.cleanup();
-  }
 }
 
 async function checkBinance() {

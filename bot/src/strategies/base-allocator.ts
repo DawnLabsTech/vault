@@ -2,6 +2,7 @@ import type { LendingProtocol, LedgerEvent, VaultConfig } from '../types.js';
 import { EventType } from '../types.js';
 import { createChildLogger } from '../utils/logger.js';
 import { round } from '../utils/math.js';
+import { getTxFeeInSol } from '../utils/tx-fee.js';
 
 const log = createChildLogger('base-allocator');
 
@@ -16,10 +17,22 @@ export interface AllocationResult {
 export class BaseAllocator {
   private protocols: Map<string, LendingProtocol>;
   private config: VaultConfig;
+  private rpcUrl: string;
 
-  constructor(protocols: LendingProtocol[], config: VaultConfig) {
+  constructor(protocols: LendingProtocol[], config: VaultConfig, rpcUrl?: string) {
     this.protocols = new Map(protocols.map((p) => [p.name, p]));
     this.config = config;
+    this.rpcUrl = rpcUrl ?? process.env.HELIUS_RPC_URL ?? '';
+  }
+
+  /**
+   * Hot-swap a protocol adapter (used by market scanner for multiply switching).
+   * Removes the old adapter and adds the new one.
+   */
+  replaceProtocol(oldName: string, newProtocol: LendingProtocol): void {
+    this.protocols.delete(oldName);
+    this.protocols.set(newProtocol.name, newProtocol);
+    log.info({ removed: oldName, added: newProtocol.name }, 'Protocol adapter replaced');
   }
 
   /** Get current USDC balance from each lending protocol */
@@ -194,12 +207,17 @@ export class BaseAllocator {
         const txSig = await protocol.withdraw(alloc.amount);
         txSigs.push(txSig);
 
+        // Fetch tx fee asynchronously
+        const feeSol = this.rpcUrl ? await getTxFeeInSol(this.rpcUrl, txSig) : 0;
+
         events.push({
           timestamp: new Date().toISOString(),
           eventType: EventType.WITHDRAW,
           amount: alloc.amount,
           asset: 'USDC',
           txHash: txSig,
+          fee: feeSol,
+          feeAsset: 'SOL',
           sourceProtocol: alloc.protocol,
           metadata: {
             action: 'rebalance_withdraw',
@@ -244,12 +262,16 @@ export class BaseAllocator {
         const txSig = await protocol.deposit(alloc.amount);
         txSigs.push(txSig);
 
+        const feeSol = this.rpcUrl ? await getTxFeeInSol(this.rpcUrl, txSig) : 0;
+
         events.push({
           timestamp: new Date().toISOString(),
           eventType: EventType.DEPOSIT,
           amount: alloc.amount,
           asset: 'USDC',
           txHash: txSig,
+          fee: feeSol,
+          feeAsset: 'SOL',
           sourceProtocol: alloc.protocol,
           metadata: {
             action: 'rebalance_deposit',

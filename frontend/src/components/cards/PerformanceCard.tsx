@@ -32,9 +32,9 @@ export function PerformanceCard() {
             valueColor="negative"
           />
           <MetricRow
-            label="Realized PnL"
-            value={formatUsd(data.realizedPnl, 4)}
-            valueColor={isPositive(data.realizedPnl) ? 'positive' : 'negative'}
+            label="Unrealized PnL"
+            value={formatUsd(data.unrealizedPnl, 4)}
+            valueColor={isPositive(data.unrealizedPnl) ? 'positive' : 'negative'}
           />
           <MetricRow
             label="Total Fees"

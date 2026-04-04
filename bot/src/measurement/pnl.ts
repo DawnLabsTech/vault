@@ -256,6 +256,7 @@ export interface PerformanceSummary {
   maxDrawdown: number;
   totalDays: number;
   realizedPnl: number;
+  unrealizedPnl: number;
   totalFees: number;
 }
 
@@ -280,7 +281,10 @@ export function getPerformanceSummary(): PerformanceSummary {
     }
   }
 
-  if (allPnl.length === 0) {
+  // Filter out days with no meaningful NAV data (e.g. bot started mid-day)
+  const validPnl = allPnl.filter(p => p.startingNav > 0 && p.endingNav > 0);
+
+  if (validPnl.length === 0) {
     return {
       totalReturn: 0,
       annualizedReturn: 0,
@@ -288,15 +292,16 @@ export function getPerformanceSummary(): PerformanceSummary {
       maxDrawdown: 0,
       totalDays: 0,
       realizedPnl: 0,
+      unrealizedPnl: 0,
       totalFees: 0,
     };
   }
 
-  const totalDays = allPnl.length;
-  const dailyReturns = allPnl.map(p => p.dailyReturn);
+  const totalDays = validPnl.length;
+  const dailyReturns = validPnl.map(p => p.dailyReturn);
 
-  const firstNav = allPnl[0]!.startingNav;
-  const lastNav = allPnl[allPnl.length - 1]!.endingNav;
+  const firstNav = validPnl[0]!.startingNav;
+  const lastNav = validPnl[validPnl.length - 1]!.endingNav;
   const totalReturn = firstNav > 0 ? (lastNav - firstNav) / firstNav : 0;
 
   // Annualized return: (1 + totalReturn)^(365/days) - 1
@@ -306,12 +311,16 @@ export function getPerformanceSummary(): PerformanceSummary {
 
   const sharpeRatio = calcSharpeRatio(dailyReturns);
 
-  const navSeries = allPnl.map(p => p.endingNav);
+  const navSeries = validPnl.map(p => p.endingNav);
   const maxDrawdown = calcMaxDrawdown(navSeries);
 
-  // Cumulative realized PnL and fees
+  // Cumulative realized PnL and fees (use allPnl to include all days)
   const realizedPnl = allPnl.reduce((sum, p) => sum + p.realizedPnl, 0);
   const totalFees = allPnl.reduce((sum, p) => sum + p.totalFees, 0);
+  // Note: realizedPnl/totalFees use allPnl (not validPnl) since fee/revenue
+  // events can occur on days without full NAV snapshots
+
+  const unrealizedPnl = lastNav - firstNav;
 
   return {
     totalReturn: round(totalReturn, 6),
@@ -320,6 +329,7 @@ export function getPerformanceSummary(): PerformanceSummary {
     maxDrawdown: round(maxDrawdown, 6),
     totalDays,
     realizedPnl: round(realizedPnl, 4),
+    unrealizedPnl: round(unrealizedPnl, 4),
     totalFees: round(totalFees, 4),
   };
 }

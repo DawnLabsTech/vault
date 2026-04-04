@@ -15,12 +15,13 @@ import { ApiServer } from './api/server.js';
 import { loadWalletFromEnv } from './connectors/solana/wallet.js';
 import { SolanaRpc } from './connectors/solana/rpc.js';
 import { KaminoLending } from './connectors/defi/kamino.js';
-import { DriftLending } from './connectors/defi/drift.js';
+import { KaminoLoopLending } from './connectors/defi/kamino-loop.js';
+import { KaminoMultiplyLending } from './connectors/defi/kamino-multiply.js';
 import { JupiterLending } from './connectors/defi/jupiter-lend.js';
 import { JupiterSwap } from './connectors/defi/jupiter-swap.js';
 import { SolanaTransactionSender } from './connectors/solana/tx-sender.js';
-import { buildDnConnectors, buildDriftDnConnectors } from './connectors/dn-connectors.js';
-import { DriftPerp } from './connectors/drift/perp.js';
+import { buildDnConnectors } from './connectors/dn-connectors.js';
+import { MarketScanner } from './core/market-scanner.js';
 import type { LendingProtocol } from './types.js';
 
 const log = createChildLogger('main');
@@ -69,13 +70,26 @@ async function main(): Promise<void> {
     const wallet = loadWalletFromEnv();
     walletAddress = walletAddress || wallet.publicKey;
 
+    // Initialize Kamino Multiply adapters from config
+    const multiplyConfigs = config.kaminoMultiply ?? [];
+    const multiplyByLabel = new Map(multiplyConfigs.map((c) => [`kamino-multiply:${c.label}`, c]));
+
     for (const protocol of config.lending.protocols) {
+      if (protocol.startsWith('kamino-multiply:')) {
+        const mc = multiplyByLabel.get(protocol);
+        if (mc) {
+          lendingAdapters.push(new KaminoMultiplyLending(walletAddress, mc, rpcUrl, wallet.secretKey));
+        } else {
+          log.warn({ protocol }, 'No matching kaminoMultiply config found, skipping');
+        }
+        continue;
+      }
       switch (protocol) {
         case 'kamino':
           lendingAdapters.push(new KaminoLending(walletAddress, rpcUrl, wallet.secretKey));
           break;
-        case 'drift':
-          lendingAdapters.push(new DriftLending(walletAddress, rpcUrl, wallet.secretKey));
+        case 'kamino-loop':
+          lendingAdapters.push(new KaminoLoopLending(walletAddress, rpcUrl, wallet.secretKey, config.kaminoLoop));
           break;
         case 'jupiter':
           lendingAdapters.push(new JupiterLending(walletAddress, rpcUrl, wallet.secretKey));
@@ -94,10 +108,17 @@ async function main(): Promise<void> {
       'Wallet not available — lending adapters in read-only mode',
     );
     // Initialize adapters without signing (getApy/getBalance still work)
+    const multiplyConfigs = config.kaminoMultiply ?? [];
+    const multiplyByLabel = new Map(multiplyConfigs.map((c) => [`kamino-multiply:${c.label}`, c]));
     for (const protocol of config.lending.protocols) {
+      if (protocol.startsWith('kamino-multiply:')) {
+        const mc = multiplyByLabel.get(protocol);
+        if (mc) lendingAdapters.push(new KaminoMultiplyLending(walletAddress, mc));
+        continue;
+      }
       switch (protocol) {
         case 'kamino': lendingAdapters.push(new KaminoLending(walletAddress)); break;
-        case 'drift': lendingAdapters.push(new DriftLending(walletAddress)); break;
+        case 'kamino-loop': lendingAdapters.push(new KaminoLoopLending(walletAddress)); break;
         case 'jupiter': lendingAdapters.push(new JupiterLending(walletAddress)); break;
       }
     }
@@ -117,9 +138,9 @@ async function main(): Promise<void> {
 
   // Initialize monitors and strategies
   const db = getDb();
-  const frPeriodsPerDay = perpExchange === 'drift' ? 24 : 3;
+  const frPeriodsPerDay = 3;
   const frMonitor = new FrMonitor(db, frPeriodsPerDay);
-  const baseAllocator = new BaseAllocator(lendingAdapters, config);
+  const baseAllocator = new BaseAllocator(lendingAdapters, config, rpcUrl);
 
   // Track latest mark price from WebSocket for DN connectors
   let latestMarkPrice = 0;
@@ -132,42 +153,63 @@ async function main(): Promise<void> {
     throw new Error('TxSender is required in live mode — check SOLANA_PRIVATE_KEY');
   }
 
-  // Build DN connectors based on perp exchange selection
-  let dnConnectors;
-  let driftPerp: DriftPerp | undefined;
-
-  if (perpExchange === 'drift') {
-    log.info('Building Drift DN connectors');
-    const wallet = loadWalletFromEnv();
-    driftPerp = new DriftPerp(rpcUrl, wallet.secretKey, walletAddress, config.solana.network);
-    dnConnectors = buildDriftDnConnectors({
-      driftPerp,
-      lendingAdapters,
-      baseAllocator,
-      jupiterSwap,
-      txSender: txSender!,
-      walletAddress,
-      config,
-    });
-  } else {
-    log.info('Building Binance DN connectors');
-    dnConnectors = buildDnConnectors({
-      binanceRest: binanceRest!,
-      lendingAdapters,
-      baseAllocator,
-      jupiterSwap,
-      txSender: txSender!,
-      walletAddress,
-      config,
-      getLatestMarkPrice: () => latestMarkPrice,
-    });
-  }
+  // Build DN connectors
+  log.info('Building Binance DN connectors');
+  const dnConnectors = buildDnConnectors({
+    binanceRest: binanceRest!,
+    lendingAdapters,
+    baseAllocator,
+    jupiterSwap,
+    txSender: txSender!,
+    walletAddress,
+    config,
+    getLatestMarkPrice: () => latestMarkPrice,
+  });
 
   const dnExecutor = new DnExecutor(config, dnConnectors, walletAddress);
   const riskManager = new RiskManager(config);
 
   // Initialize Solana RPC
   const solanaRpc = new SolanaRpc(rpcUrl);
+
+  // Find KaminoLoop adapter for health monitoring
+  const kaminoLoop = lendingAdapters.find((a) => a.name === 'kamino-loop') as
+    | import('./connectors/defi/kamino-loop.js').KaminoLoopLending
+    | undefined;
+
+  // Find KaminoMultiply adapters for health monitoring + reward claiming
+  const kaminoMultiplyAdapters = lendingAdapters.filter(
+    (a) => a.name.startsWith('kamino-multiply:'),
+  ) as import('./connectors/defi/kamino-multiply.js').KaminoMultiplyLending[];
+
+  // Initialize Market Scanner for multiply market rebalancing
+  let marketScanner: MarketScanner | null = null;
+  const multiplyCandidates = config.kaminoMultiplyCandidates ?? [];
+  if (multiplyCandidates.length > 0 && rpcUrl) {
+    try {
+      const wallet = loadWalletFromEnv();
+      const rebalanceConfig = config.multiplyRebalance ?? {
+        minDiffBps: 100,
+        minHoldingDays: 3,
+        scanIntervalMs: 21_600_000,
+        riskPenalty: [0, 0.005, 0.015] as [number, number, number],
+        defaultTargetHealthRate: 1.15,
+        defaultAlertHealthRate: 1.10,
+        defaultEmergencyHealthRate: 1.05,
+      };
+      marketScanner = new MarketScanner(
+        multiplyCandidates,
+        rebalanceConfig,
+        rpcUrl,
+        walletAddress,
+        wallet.secretKey,
+        db,
+      );
+      log.info({ candidates: multiplyCandidates.length }, 'Market scanner initialized');
+    } catch (err) {
+      log.warn({ error: (err as Error).message }, 'Market scanner initialization failed');
+    }
+  }
 
   // Create orchestrator
   const orchestrator = new Orchestrator({
@@ -180,13 +222,17 @@ async function main(): Promise<void> {
     solanaRpc,
     walletAddress,
     perpExchange,
-    driftPerp: driftPerp ?? null,
+    kaminoLoop: kaminoLoop ?? null,
+    kaminoMultiplyAdapters,
+    marketScanner,
   });
 
   // Start API server
   const apiServer = new ApiServer();
   apiServer.setFrMonitor(frMonitor);
   apiServer.setBaseAllocator(baseAllocator);
+  apiServer.setMultiplyAdapters(kaminoMultiplyAdapters);
+  apiServer.setMarketScanner(marketScanner);
   apiServer.setPerpExchange(perpExchange);
   apiServer.start(3000);
 
@@ -220,7 +266,7 @@ async function main(): Promise<void> {
     dryRun: config.general.dryRun,
     perpExchange,
     symbol: config.perp.symbol,
-    testnet: perpExchange === 'binance' ? config.binance.testnet : false,
+    testnet: config.binance.testnet,
   }, 'Vault Strategy Bot is running');
 }
 

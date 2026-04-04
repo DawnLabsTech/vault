@@ -20,5 +20,6 @@ export interface SwapResult {
 export const MINTS = {
   SOL: 'So11111111111111111111111111111111111111112',
   USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  USDT: 'Es9vMFrzaCERmJfrV1qLARg3sFZn7NgzV2aKH9QQeTWb',
   DAWNSOL: 'DAwNdsyuXU8RornMj5B9QwHG4yoxHnPGHCXzG9ASUNJ2',
 } as const;

@@ -7,6 +7,8 @@ import { getStateJson } from '../measurement/state-store.js';
 import { getDb } from '../measurement/db.js';
 import { FrMonitor } from '../core/fr-monitor.js';
 import type { BaseAllocator } from '../strategies/base-allocator.js';
+import type { KaminoMultiplyLending } from '../connectors/defi/kamino-multiply.js';
+import type { MarketScanner } from '../core/market-scanner.js';
 import type { PerpExchange } from '../types.js';
 
 const log = createChildLogger('api');
@@ -17,6 +19,8 @@ export class ApiServer {
   private server: ReturnType<typeof createServer> | null = null;
   private frMonitor: FrMonitor | null = null;
   private baseAllocator: BaseAllocator | null = null;
+  private multiplyAdapters: KaminoMultiplyLending[] = [];
+  private marketScanner: MarketScanner | null = null;
   private perpExchange: PerpExchange = 'binance';
 
   setFrMonitor(monitor: FrMonitor): void {
@@ -25,6 +29,14 @@ export class ApiServer {
 
   setBaseAllocator(allocator: BaseAllocator): void {
     this.baseAllocator = allocator;
+  }
+
+  setMultiplyAdapters(adapters: KaminoMultiplyLending[]): void {
+    this.multiplyAdapters = adapters;
+  }
+
+  setMarketScanner(scanner: MarketScanner | null): void {
+    this.marketScanner = scanner;
   }
 
   setPerpExchange(exchange: PerpExchange): void {
@@ -162,6 +174,12 @@ export class ApiServer {
         break;
       }
 
+      case '/api/multiply': {
+        const multiplyData = await this.getMultiplyData();
+        this.sendJson(res, multiplyData);
+        break;
+      }
+
       case '/': {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(this.getDashboardHtml());
@@ -208,6 +226,98 @@ export class ApiServer {
     return { lending, dawnsolApy };
   }
 
+  private async getMultiplyData(): Promise<{
+    positions: Array<{
+      label: string;
+      balance: number;
+      healthRate: number;
+      effectiveApy: number;
+      leverage: number;
+      targetHealthRate: number;
+      alertHealthRate: number;
+      emergencyHealthRate: number;
+    }>;
+    candidates: Array<{
+      label: string;
+      effectiveApy: number;
+      adjustedApy: number;
+      movingAvg: number | null;
+      riskTier: number;
+      active: boolean;
+      capacity: { remaining: number; utilizationRatio: number } | null;
+      riskAssessment: {
+        compositeScore: number;
+        dimensions: {
+          pegStability: number;
+          liquidityDepth: number;
+          reserveUtilization: number;
+          tvlProtocol: number;
+          borrowRateVol: number;
+          collateralType: number;
+        };
+        riskPenalty: number;
+        targetHealthRate: number;
+        maxPositionCap: number;
+        alertLevel: string;
+      } | null;
+    }>;
+  }> {
+    const positions = [];
+    for (const adapter of this.multiplyAdapters) {
+      try {
+        const [balance, healthRate, effectiveApy, leverage] = await Promise.all([
+          adapter.getBalance(),
+          adapter.getHealthRate(),
+          adapter.getApy(),
+          adapter.getTargetLeverage(),
+        ]);
+        const cfg = adapter.getMultiplyConfig();
+        positions.push({
+          label: cfg.label,
+          balance,
+          healthRate,
+          effectiveApy,
+          leverage,
+          targetHealthRate: cfg.targetHealthRate,
+          alertHealthRate: cfg.alertHealthRate,
+          emergencyHealthRate: cfg.emergencyHealthRate,
+        });
+      } catch (err) {
+        log.warn({ adapter: adapter.name, error: (err as Error).message }, 'Failed to get multiply position data');
+      }
+    }
+
+    const activeLabels = new Set(positions.map((p) => p.label));
+    const scannerData = this.marketScanner?.getLatestScans() ?? [];
+    const candidates = scannerData.map((s) => ({
+      label: s.label,
+      effectiveApy: s.effectiveApy,
+      adjustedApy: s.adjustedApy,
+      movingAvg: s.movingAvg,
+      riskTier: 0, // filled below
+      active: activeLabels.has(s.label),
+      capacity: s.capacity ? { remaining: s.capacity.remaining, utilizationRatio: s.capacity.utilizationRatio } : null,
+      riskAssessment: s.riskAssessment ? {
+        compositeScore: s.riskAssessment.compositeScore,
+        dimensions: s.riskAssessment.dimensions,
+        riskPenalty: s.riskAssessment.riskPenalty,
+        targetHealthRate: s.riskAssessment.targetHealthRate,
+        maxPositionCap: s.riskAssessment.maxPositionCap,
+        alertLevel: s.riskAssessment.alertLevel,
+      } : null,
+    }));
+
+    // Fill riskTier from config
+    const config = (await import('../config.js')).getConfig();
+    const candidateConfigs = config.kaminoMultiplyCandidates ?? [];
+    for (const c of candidates) {
+      const cfg = candidateConfigs.find((cc) => cc.label === c.label);
+      c.riskTier = cfg?.riskTier ?? 2;
+    }
+
+    return { positions, candidates };
+  }
+
   private async fetchFrHistory(months: number): Promise<Array<{
     symbol: string;
     fundingRate: number;
@@ -216,37 +326,6 @@ export class ApiServer {
   }>> {
     const startTime = Date.now() - months * 30 * 24 * 60 * 60 * 1000;
 
-    if (this.perpExchange === 'drift') {
-      try {
-        const res = await fetch(
-          `https://data.api.drift.trade/fundingRates?marketIndex=0`,
-        );
-        if (!res.ok) return [];
-        const json = (await res.json()) as any;
-        const records: any[] = json.fundingRates ?? json;
-        return records
-          .filter((d: any) => {
-            const ts = parseInt(d.ts) * 1000;
-            return ts >= startTime;
-          })
-          .map((d: any) => {
-            // Drift fundingRate is absolute (USD/SOL/hour); divide by oracle price for %
-            const rawFr = parseInt(d.fundingRate);
-            const oracle = parseInt(d.oraclePriceTwap);
-            const frPct = oracle > 0 ? (rawFr / 1e9) / (oracle / 1e6) : 0;
-            return {
-              symbol: 'SOL-PERP',
-              fundingRate: frPct,
-              fundingTime: parseInt(d.ts) * 1000,
-            };
-          });
-      } catch (err) {
-        log.warn({ error: (err as Error).message }, 'Failed to fetch Drift FR history');
-        return [];
-      }
-    }
-
-    // Binance
     try {
       const res = await fetch(
         `https://fapi.binance.com/fapi/v1/fundingRate?symbol=SOLUSDC&startTime=${startTime}&limit=1000`,
