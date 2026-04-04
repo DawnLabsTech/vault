@@ -269,7 +269,7 @@ export class ApiServer {
           adapter.getBalance(),
           adapter.getHealthRate(),
           adapter.getApy(),
-          adapter.getTargetLeverage(),
+          adapter.getCurrentLeverage(),
         ]);
         const cfg = adapter.getMultiplyConfig();
         positions.push({

@@ -203,6 +203,31 @@ export class KaminoMultiplyLending implements LendingProtocol {
   }
 
   /**
+   * Get current actual leverage from on-chain obligation data.
+   * leverage = totalDeposit / (totalDeposit - totalBorrow)
+   */
+  async getCurrentLeverage(): Promise<number> {
+    return withRetry(async () => {
+      const { market } = await this.ensureMarketLoaded();
+      await market.loadReserves();
+
+      const obligation = await market.getObligationByWallet(
+        address(this.walletAddress),
+        this.getObligationType(),
+      );
+      if (!obligation) return 1;
+
+      const stats = obligation.refreshedStats;
+      const deposit = stats.userTotalDeposit.toNumber();
+      const borrow = stats.userTotalBorrow.toNumber();
+      const equity = deposit - borrow;
+
+      if (equity <= 0) return 1;
+      return Math.round((deposit / equity) * 100) / 100;
+    }, 'kamino-multiply-current-leverage');
+  }
+
+  /**
    * Get the target leverage based on on-chain LTV data.
    * Caches after first calculation.
    */
