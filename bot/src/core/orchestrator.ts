@@ -763,12 +763,12 @@ export class Orchestrator {
       }
 
       // Step 4: Withdraw from current position (reuse balance from above)
+      const rpcUrl = process.env.HELIUS_RPC_URL ?? '';
       if (currentBalance < 0.01) {
         log.info('Current position balance is negligible, skipping withdraw');
       } else {
         log.info({ balance: currentBalance, from: currentLabel }, 'Withdrawing from current market');
         const withdrawSig = await currentAdapter.withdraw(currentBalance);
-        const rpcUrl = process.env.HELIUS_RPC_URL ?? '';
         const withdrawFee = rpcUrl ? await getTxFeeInSol(rpcUrl, withdrawSig) : 0;
 
         recordEvent({
