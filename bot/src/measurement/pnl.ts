@@ -305,7 +305,8 @@ export function getPerformanceSummary(): PerformanceSummary {
   const totalReturn = firstNav > 0 ? (lastNav - firstNav) / firstNav : 0;
 
   // Annualized return: (1 + totalReturn)^(365/days) - 1
-  const annualizedReturn = totalDays > 0
+  // Only annualize when we have >= 7 days of data to avoid misleading extrapolation
+  const annualizedReturn = totalDays >= 7
     ? Math.pow(1 + totalReturn, 365 / totalDays) - 1
     : 0;
 

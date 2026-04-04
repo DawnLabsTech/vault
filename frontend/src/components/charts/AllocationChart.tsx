@@ -1,14 +1,11 @@
 'use client';
 
 import { useStatus } from '@/hooks/useStatus';
-import { useActivePerpExchange } from '@/hooks/useFr';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { formatUsd } from '@/lib/format';
 
 export function AllocationChart() {
   const { data, isLoading } = useStatus();
-  const { data: configData } = useActivePerpExchange();
-  const perpExchange = configData?.perpExchange === 'drift' ? 'Drift' : 'Binance';
   const s = data?.snapshot;
 
   if (isLoading || !s) {
@@ -23,50 +20,101 @@ export function AllocationChart() {
   }
 
   const total = s.totalNavUsdc || 1;
-  const segments = [
-    { label: 'Lending', value: s.lendingBalance, color: '#00ff88' },
-    { label: 'Multiply', value: s.multiplyBalance ?? 0, color: '#aa88ff' },
-    { label: 'dawnSOL', value: s.dawnsolUsdcValue, color: '#00bbff' },
-    { label: `${perpExchange} USDC`, value: s.binanceUsdcBalance, color: '#ffaa00' },
-    { label: 'PERP (abs)', value: Math.abs(s.binancePerpSize), color: '#ff4444' },
-  ].filter((seg) => seg.value > 0);
+
+  // Build segments: Lending breakdown + Multiply breakdown + other components
+  const segments: { label: string; value: number; color: string }[] = [];
+
+  // Lending breakdown by protocol
+  const lendingColors: Record<string, string> = {
+    kamino: '#00ff88',
+    jupiter: '#7dd3fc',
+    marginfi: '#a78bfa',
+  };
+  if (s.lendingBreakdown && Object.keys(s.lendingBreakdown).length > 0) {
+    for (const [protocol, balance] of Object.entries(s.lendingBreakdown)) {
+      if (balance > 0) {
+        segments.push({
+          label: `Lending: ${protocol}`,
+          value: balance,
+          color: lendingColors[protocol] ?? '#00ff88',
+        });
+      }
+    }
+  } else if (s.lendingBalance > 0) {
+    segments.push({ label: 'Lending', value: s.lendingBalance, color: '#00ff88' });
+  }
+
+  // Multiply breakdown by pair
+  const multiplyColors = ['#aa88ff', '#d8b4fe', '#c084fc'];
+  if (s.multiplyBreakdown && Object.keys(s.multiplyBreakdown).length > 0) {
+    Object.entries(s.multiplyBreakdown).forEach(([label, balance], i) => {
+      if (balance > 0) {
+        segments.push({
+          label: `Multiply: ${label}`,
+          value: balance,
+          color: multiplyColors[i % multiplyColors.length]!,
+        });
+      }
+    });
+  } else if ((s.multiplyBalance ?? 0) > 0) {
+    segments.push({ label: 'Multiply', value: s.multiplyBalance, color: '#aa88ff' });
+  }
+
+  // Buffer
+  if (s.bufferUsdcBalance > 0) {
+    segments.push({ label: 'Buffer USDC', value: s.bufferUsdcBalance, color: '#666' });
+  }
+
+  // DN components
+  if (s.dawnsolUsdcValue > 0) {
+    segments.push({ label: 'dawnSOL', value: s.dawnsolUsdcValue, color: '#00bbff' });
+  }
+  if (s.binanceUsdcBalance > 0) {
+    segments.push({ label: 'Binance USDC', value: s.binanceUsdcBalance, color: '#ffaa00' });
+  }
+
+  const filtered = segments.filter((seg) => seg.value > 0);
 
   return (
     <div className="bg-vault-card border border-vault-border rounded-lg p-4">
       <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider mb-3">
         Strategy Allocation
       </h3>
-      <div className="space-y-3">
-        {/* Stacked bar */}
-        <div className="flex h-6 rounded overflow-hidden">
-          {segments.map((seg) => (
-            <div
-              key={seg.label}
-              style={{
-                width: `${(seg.value / total) * 100}%`,
-                backgroundColor: seg.color,
-              }}
-              className="opacity-70 hover:opacity-100 transition-opacity"
-              title={`${seg.label}: ${formatUsd(seg.value)} (${((seg.value / total) * 100).toFixed(1)}%)`}
-            />
-          ))}
-        </div>
-        {/* Legend */}
-        <div className="grid grid-cols-2 gap-2">
-          {segments.map((seg) => (
-            <div key={seg.label} className="flex items-center gap-2 text-xs">
-              <span
-                className="w-3 h-3 rounded-sm flex-shrink-0"
-                style={{ backgroundColor: seg.color, opacity: 0.7 }}
+      {filtered.length === 0 ? (
+        <p className="text-vault-muted text-sm">No allocation data</p>
+      ) : (
+        <div className="space-y-3">
+          {/* Stacked bar */}
+          <div className="flex h-6 rounded overflow-hidden">
+            {filtered.map((seg) => (
+              <div
+                key={seg.label}
+                style={{
+                  width: `${(seg.value / total) * 100}%`,
+                  backgroundColor: seg.color,
+                }}
+                className="opacity-70 hover:opacity-100 transition-opacity"
+                title={`${seg.label}: ${formatUsd(seg.value)} (${((seg.value / total) * 100).toFixed(1)}%)`}
               />
-              <span className="text-vault-muted">{seg.label}</span>
-              <span className="text-vault-text-bright ml-auto font-semibold">
-                {((seg.value / total) * 100).toFixed(1)}%
-              </span>
-            </div>
-          ))}
+            ))}
+          </div>
+          {/* Legend */}
+          <div className="grid grid-cols-2 gap-2">
+            {filtered.map((seg) => (
+              <div key={seg.label} className="flex items-center gap-2 text-xs">
+                <span
+                  className="w-3 h-3 rounded-sm flex-shrink-0"
+                  style={{ backgroundColor: seg.color, opacity: 0.7 }}
+                />
+                <span className="text-vault-muted">{seg.label}</span>
+                <span className="text-vault-text-bright ml-auto font-semibold">
+                  {((seg.value / total) * 100).toFixed(1)}%
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

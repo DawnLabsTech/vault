@@ -71,18 +71,38 @@ const DIMENSION_WEIGHTS: Record<string, number> = {
   collateralType: 10,
 };
 
+const DIMENSION_DESCRIPTIONS: Record<string, string> = {
+  pegStability: 'Collateral token vs USDC peg deviation. Higher = larger depeg risk.',
+  liquidityDepth: 'On-chain liquidity depth for the collateral token. Higher = thinner liquidity.',
+  reserveUtilization: 'Kamino reserve utilization ratio. Higher = closer to borrow cap, withdrawal risk.',
+  tvlProtocol: 'Protocol TVL relative to position size. Higher = concentration risk.',
+  borrowRateVol: 'Borrow rate volatility over 24h. Higher = unstable cost of leverage.',
+  collateralType: 'Inherent collateral asset risk classification (stablecoin, LST, volatile).',
+};
+
 function RiskDimensionBar({ name, score }: { name: string; score: number }) {
+  const [showDesc, setShowDesc] = useState(false);
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="text-vault-muted w-20 shrink-0">{DIMENSION_LABELS[name] ?? name}</span>
-      <div className="flex-1 h-1.5 bg-vault-border/30 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${riskScoreBg(score)}`}
-          style={{ width: `${Math.min(score, 100)}%` }}
-        />
+    <div>
+      <div
+        className="flex items-center gap-2 text-xs cursor-pointer hover:bg-vault-border/10 rounded px-1 -mx-1"
+        onClick={() => setShowDesc((v) => !v)}
+      >
+        <span className="text-vault-muted w-20 shrink-0">{DIMENSION_LABELS[name] ?? name}</span>
+        <div className="flex-1 h-1.5 bg-vault-border/30 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${riskScoreBg(score)}`}
+            style={{ width: `${Math.min(score, 100)}%` }}
+          />
+        </div>
+        <span className={`w-8 text-right font-mono ${riskScoreColor(score)}`}>{score.toFixed(0)}</span>
+        <span className="text-vault-muted/50 w-6 text-right">{DIMENSION_WEIGHTS[name]}%</span>
       </div>
-      <span className={`w-8 text-right font-mono ${riskScoreColor(score)}`}>{score.toFixed(0)}</span>
-      <span className="text-vault-muted/50 w-6 text-right">{DIMENSION_WEIGHTS[name]}%</span>
+      {showDesc && DIMENSION_DESCRIPTIONS[name] && (
+        <p className="text-[10px] text-vault-muted/70 pl-1 mt-0.5 mb-1 leading-relaxed">
+          {DIMENSION_DESCRIPTIONS[name]}
+        </p>
+      )}
     </div>
   );
 }
@@ -123,6 +143,10 @@ function RiskDetailPanel({ risk, label }: { risk: RiskAssessmentData; label: str
           <span className="text-vault-muted">Alert</span>
           <span className={`font-semibold uppercase ${alertLevelColor(risk.alertLevel)}`}>{risk.alertLevel}</span>
         </div>
+      </div>
+
+      <div className="text-[10px] text-vault-muted/60 border-t border-vault-border/20 pt-2 mt-2 leading-relaxed">
+        <p>Composite = weighted sum of 6 dimensions (click each bar for details). Penalty reduces effective APY. Health Target and Max Position Cap are dynamically adjusted based on score.</p>
       </div>
     </div>
   );
