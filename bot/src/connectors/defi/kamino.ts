@@ -30,6 +30,51 @@ const KAMINO_API = 'https://api.kamino.finance';
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const KAMINO_MAIN_MARKET = '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF';
 
+function parseNumeric(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+export function extractKaminoUsdcBalance(data: unknown): number {
+  const obligations = Array.isArray(data) ? data : [];
+  let total = 0;
+
+  for (const obligation of obligations) {
+    const userTotalDeposit = parseNumeric((obligation as any)?.refreshedStats?.userTotalDeposit);
+    if (userTotalDeposit != null) {
+      total += userTotalDeposit;
+      continue;
+    }
+
+    const depositsRaw = (obligation as any)?.deposits ?? (obligation as any)?.supplyPositions ?? [];
+    const deposits = Array.isArray(depositsRaw) ? depositsRaw : [];
+    const usdcDeposit = deposits.find((d: any) =>
+      d?.mint === USDC_MINT
+      || d?.tokenMint === USDC_MINT
+      || d?.liquidityTokenMint === USDC_MINT
+      || d?.symbol === 'USDC',
+    );
+
+    if (!usdcDeposit) continue;
+
+    const balance = parseNumeric(usdcDeposit.amount)
+      ?? parseNumeric(usdcDeposit.balance)
+      ?? (parseNumeric(usdcDeposit.depositedAmount) != null
+        ? parseNumeric(usdcDeposit.depositedAmount)! / 1e6
+        : null);
+
+    if (balance != null) {
+      total += balance;
+    }
+  }
+
+  return total;
+}
+
 export class KaminoLending implements LendingProtocol {
   readonly name = 'kamino';
   private walletAddress: string;
@@ -101,16 +146,7 @@ export class KaminoLending implements LendingProtocol {
         return 0;
       }
       const data = await res.json() as any;
-      // Find USDC supply balance across obligations
-      const obligations = Array.isArray(data) ? data : [];
-      for (const obligation of obligations) {
-        const deposits = obligation?.deposits ?? obligation?.supplyPositions ?? [];
-        const usdcDeposit = deposits.find((d: any) => d.mint === USDC_MINT || d.symbol === 'USDC');
-        if (usdcDeposit?.amount ?? usdcDeposit?.balance) {
-          return usdcDeposit.amount ?? usdcDeposit.balance;
-        }
-      }
-      return 0;
+      return extractKaminoUsdcBalance(data);
     }, 'kamino-balance');
   }
 
