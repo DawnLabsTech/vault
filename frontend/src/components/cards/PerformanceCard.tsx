@@ -22,10 +22,10 @@ export function PerformanceCard() {
           />
           <MetricRow
             label="Annualized"
-            value={formatPct(data.annualizedReturn)}
-            valueColor={isPositive(data.annualizedReturn) ? 'positive' : 'negative'}
+            value={data.totalDays >= 7 ? formatPct(data.annualizedReturn) : 'N/A (<7d)'}
+            valueColor={data.totalDays >= 7 && !isPositive(data.annualizedReturn) ? 'negative' : data.totalDays >= 7 ? 'positive' : undefined}
           />
-          <MetricRow label="Sharpe Ratio" value={data.sharpeRatio.toFixed(2)} />
+          <MetricRow label="Sharpe Ratio" value={data.totalDays >= 7 ? data.sharpeRatio.toFixed(2) : 'N/A (<7d)'} />
           <MetricRow
             label="Max Drawdown"
             value={formatPct(data.maxDrawdown, 4)}

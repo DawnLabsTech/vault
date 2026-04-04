@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { usePnl } from '@/hooks/usePnl';
+import { usePerformance } from '@/hooks/usePerformance';
 import { Skeleton } from '@/components/shared/Skeleton';
 import { createChart, AreaSeries, type IChartApi, type ISeriesApi, ColorType } from 'lightweight-charts';
+import { formatPct } from '@/lib/format';
 
 type Range = '1W' | '1M' | 'ALL';
 
@@ -20,6 +22,7 @@ export function PnlChart() {
   const [range, setRange] = useState<Range>('ALL');
   const from = getFromDate(range);
   const { data, isLoading } = usePnl(from);
+  const { data: perfData } = usePerformance();
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Area'> | null>(null);
@@ -81,12 +84,26 @@ export function PnlChart() {
 
   const ranges: Range[] = ['1W', '1M', 'ALL'];
 
+  const annualizedLabel = perfData && perfData.totalDays >= 7
+    ? formatPct(perfData.annualizedReturn)
+    : null;
+
   return (
     <div className="bg-vault-card border border-vault-border rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
-          Cumulative PnL (%)
-        </h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">
+            Cumulative PnL (%)
+          </h3>
+          {annualizedLabel && (
+            <span className="text-[10px] text-vault-muted">
+              Annualized:{' '}
+              <span className={perfData!.annualizedReturn >= 0 ? 'text-vault-accent' : 'text-vault-negative'}>
+                {annualizedLabel}
+              </span>
+            </span>
+          )}
+        </div>
         <div className="flex gap-1">
           {ranges.map((r) => (
             <button
