@@ -5,12 +5,11 @@ import { getOnycApy, isOnycToken } from './onre-apy.js';
 import { getPrimeApy, isPrimeToken } from './hastra-apy.js';
 import {
   KaminoMarket,
+  KaminoAction,
   MultiplyObligation,
   ObligationTypeTag,
   DEFAULT_RECENT_SLOT_DURATION_MS,
   PROGRAM_ID,
-  getDepositWithLeverageIxs,
-  getWithdrawWithLeverageIxs,
   type KaminoObligation,
 } from '@kamino-finance/klend-sdk';
 import { Farms } from '@kamino-finance/farms-sdk';
@@ -200,6 +199,31 @@ export class KaminoMultiplyLending implements LendingProtocol {
       address(this.cfg.debtToken),
       PROGRAM_ID,
     );
+  }
+
+  /**
+   * Get current actual leverage from on-chain obligation data.
+   * leverage = totalDeposit / (totalDeposit - totalBorrow)
+   */
+  async getCurrentLeverage(): Promise<number> {
+    return withRetry(async () => {
+      const { market } = await this.ensureMarketLoaded();
+      await market.loadReserves();
+
+      const obligation = await market.getObligationByWallet(
+        address(this.walletAddress),
+        this.getObligationType(),
+      );
+      if (!obligation) return 1; // no position = 1x
+
+      const stats = obligation.refreshedStats;
+      const deposit = stats.userTotalDeposit.toNumber();
+      const borrow = stats.userTotalBorrow.toNumber();
+      const equity = deposit - borrow;
+
+      if (equity <= 0) return 1;
+      return Math.round((deposit / equity) * 100) / 100;
+    }, 'kamino-multiply-current-leverage');
   }
 
   /**
@@ -593,29 +617,24 @@ export class KaminoMultiplyLending implements LendingProtocol {
   // ── On-chain operations ───────────────────────────────────────
 
   /**
-   * Send instructions as a versioned transaction with Address Lookup Tables.
-   * Uses @solana/web3.js for reliable ALT support (required for Multiply flash loans).
+   * Convert @solana/kit instructions and lookup tables to @solana/web3.js format.
    */
-  private async sendIxs(
-    ixs: Instruction[],
-    lookupTables: any[] = [],
-    _rpc: any,
-    signer: KeyPairSigner,
-  ): Promise<string> {
-    if (ixs.length === 0) throw new Error('No instructions to send');
-
+  private async prepareWeb3Tx(ixs: Instruction[], lookupTables: any[]): Promise<{
+    web3Ixs: import('@solana/web3.js').TransactionInstruction[];
+    web3ALTs: import('@solana/web3.js').AddressLookupTableAccount[];
+    connection: import('@solana/web3.js').Connection;
+    keypair: import('@solana/web3.js').Keypair;
+  }> {
     const {
-      Connection, Keypair, VersionedTransaction, TransactionMessage,
-      PublicKey, TransactionInstruction, AddressLookupTableAccount,
+      Connection, Keypair, PublicKey, TransactionInstruction,
     } = await import('@solana/web3.js');
 
     const connection = new Connection(this.rpcUrl!, 'confirmed');
     const keypair = Keypair.fromSecretKey(this.secretKey!);
 
-    // Convert @solana/kit instructions to @solana/web3.js format
     const web3Ixs = ixs.map((ix) => new TransactionInstruction({
       programId: new PublicKey(ix.programAddress),
-      keys: (ix.accounts ?? []).map((acc: any) => ({
+      keys: ((ix as any).accounts ?? []).map((acc: any) => ({
         pubkey: new PublicKey(acc.address),
         isSigner: acc.role === 2 || acc.role === 3,
         isWritable: acc.role === 1 || acc.role === 3,
@@ -623,74 +642,154 @@ export class KaminoMultiplyLending implements LendingProtocol {
       data: Buffer.from(ix.data as Uint8Array),
     }));
 
-    // Convert lookup tables — may be @solana/web3.js AddressLookupTableAccount or raw objects
-    const web3ALTs: InstanceType<typeof AddressLookupTableAccount>[] = [];
+    const web3ALTs: import('@solana/web3.js').AddressLookupTableAccount[] = [];
     for (const lt of lookupTables) {
       try {
-        // Already a web3.js AddressLookupTableAccount
         if (lt && lt.key && lt.state && lt.state.addresses) {
           web3ALTs.push(lt as any);
           continue;
         }
-        // Raw address — fetch from chain
         const key = lt?.address ?? lt?.key;
         if (!key) continue;
         const ltAddress = new PublicKey(typeof key === 'string' ? key : key.toString());
         const ltAccount = await connection.getAddressLookupTable(ltAddress);
-        if (ltAccount.value) {
-          web3ALTs.push(ltAccount.value);
-        }
-      } catch {
-        // Skip invalid lookup tables
-      }
+        if (ltAccount.value) web3ALTs.push(ltAccount.value);
+      } catch { /* skip */ }
     }
 
-    const { blockhash } = await connection.getLatestBlockhash('confirmed');
-
-    const messageV0 = new (TransactionMessage as any)({
-      payerKey: keypair.publicKey,
-      recentBlockhash: blockhash,
-      instructions: web3Ixs,
-    }).compileToV0Message(web3ALTs);
-
-    log.debug({ ixCount: web3Ixs.length, altCount: web3ALTs.length, altKeys: web3ALTs.map(a => a.key.toBase58().slice(0,8)) }, 'Building v0 transaction');
-
-    const tx = new VersionedTransaction(messageV0);
-    tx.sign([keypair]);
-
-    log.debug({ txSize: tx.serialize().length }, 'Transaction serialized');
-
-    const sig = await connection.sendTransaction(tx, {
-      skipPreflight: false,
-      preflightCommitment: 'confirmed',
-      maxRetries: 3,
-    });
-
-    log.info({ sig, ixCount: ixs.length, altCount: web3ALTs.length }, 'Transaction sent');
-    return sig;
+    return { web3Ixs, web3ALTs, connection, keypair };
   }
 
   /**
-   * Deposit and build leveraged Multiply position via SDK flash loan.
+   * Send instructions as a versioned transaction.
+   * If the transaction exceeds Solana's size limit, automatically splits
+   * into multiple transactions and sends as a Jito bundle (atomic).
+   */
+  private async sendIxs(
+    ixs: Instruction[],
+    lookupTables: any[] = [],
+    _rpc: any,
+    _signer: KeyPairSigner,
+  ): Promise<string> {
+    if (ixs.length === 0) throw new Error('No instructions to send');
+
+    const { web3Ixs, web3ALTs, connection, keypair } = await this.prepareWeb3Tx(ixs, lookupTables);
+    const { TransactionMessage, VersionedTransaction } = await import('@solana/web3.js');
+
+    log.debug({ ixCount: web3Ixs.length, altCount: web3ALTs.length }, 'Building transaction');
+
+    // Try single transaction first
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    try {
+      const msg = new TransactionMessage({
+        payerKey: keypair.publicKey,
+        recentBlockhash: blockhash,
+        instructions: web3Ixs,
+      }).compileToV0Message(web3ALTs);
+
+      const tx = new VersionedTransaction(msg);
+      const serialized = tx.serialize();
+
+      if (serialized.length <= 1232) {
+        tx.sign([keypair]);
+        const sig = await connection.sendTransaction(tx, {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        });
+        log.info({ sig, ixCount: web3Ixs.length, txSize: serialized.length }, 'Single transaction sent');
+        return sig;
+      }
+    } catch {
+      // Serialization failed — tx too large, fall through to Jito bundle
+    }
+
+    // Transaction too large → split and send as Jito bundle
+    log.info({ ixCount: web3Ixs.length }, 'Transaction too large, splitting into Jito bundle');
+
+    const { splitAndSignTransactions, sendJitoBundle } = await import('../solana/jito-bundle.js');
+    const txs = await splitAndSignTransactions(web3Ixs, keypair, connection, web3ALTs);
+
+    const result = await sendJitoBundle(txs, keypair, connection, {
+      tipLamports: 10_000,
+      maxWaitMs: 60_000,
+    });
+
+    if (result.status === 'failed') {
+      throw new Error(`Jito bundle failed: ${result.bundleId}`);
+    }
+    if (result.status === 'timeout') {
+      log.warn({ bundleId: result.bundleId }, 'Jito bundle timed out — may still land');
+    }
+
+    log.info(
+      { bundleId: result.bundleId, status: result.status, txCount: txs.length },
+      'Jito bundle sent',
+    );
+
+    return result.bundleId;
+  }
+
+  /**
+   * Send a KaminoAction transaction via @solana/kit.
+   */
+  private async sendKaminoTx(
+    kaminoAction: { setupIxs: any[]; lendingIxs: any[]; cleanupIxs: any[] },
+    rpc: any,
+    signer: KeyPairSigner,
+  ): Promise<string> {
+    const allIxs = [...kaminoAction.setupIxs, ...kaminoAction.lendingIxs, ...kaminoAction.cleanupIxs];
+    if (allIxs.length === 0) throw new Error('No instructions');
+
+    const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
+    const txMessage = pipe(
+      createTransactionMessage({ version: 0 }),
+      (msg) => setTransactionMessageFeePayer(signer.address, msg),
+      (msg) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, msg),
+      (msg) => appendTransactionMessageInstructions(allIxs, msg),
+    );
+    const signedTx = await signTransactionMessageWithSigners(txMessage);
+    const base64Tx = getBase64EncodedWireTransaction(signedTx);
+    return rpc.sendTransaction(base64Tx, {
+      encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: BigInt(3),
+    }).send();
+  }
+
+  /**
+   * Deposit and build leveraged Multiply position via manual loop.
    *
-   * When inputToken differs from collToken (e.g. USDC → ONyc),
-   * automatically swaps via Jupiter before depositing.
+   * Flow:
+   *   1. Swap inputToken → collToken (if needed)
+   *   2. Deposit collToken as collateral
+   *   3. Borrow debtToken against collateral
+   *   4. Swap debtToken → collToken
+   *   5. Re-deposit collToken
+   *   6. Repeat 3-5 until target leverage reached
    *
    * @param amount - Amount in inputToken units (e.g. USDC amount)
    */
   async deposit(amount: number): Promise<string> {
     const { rpc, signer, market } = await this.ensureInitialized();
-    await market.loadReserves();
 
-    // Step 0: Swap inputToken → collToken if needed
+    const targetLeverage = await this.getTargetLeverage();
+    const maxLtv = 0.60; // conservative: 60% of max LTV per loop
+    const maxLoops = 5;
+    const txSigs: string[] = [];
+    const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+    log.info(
+      { amount, targetLeverage, label: this.cfg.label, maxLoops },
+      'Multiply deposit starting (manual loop)',
+    );
+
+    // Step 1: Swap inputToken → collToken if needed
     let collAmount = amount;
-    const swapTxSigs: string[] = [];
-
     if (this.needsInputSwap()) {
       log.info(
         { from: this.cfg.inputToken!.slice(0, 8), to: this.cfg.collToken.slice(0, 8), amount },
-        'Pre-deposit swap: inputToken → collToken',
+        'Swap inputToken → collToken',
       );
+      const inputBaseUnits = Math.floor(amount * Math.pow(10, this.cfg.inputDecimals ?? 6));
       const { outputAmount, txSig } = await this.jupiterSwap(
         this.cfg.inputToken!,
         this.cfg.collToken,
@@ -698,76 +797,99 @@ export class KaminoMultiplyLending implements LendingProtocol {
         this.cfg.inputDecimals ?? 6,
       );
       collAmount = outputAmount;
-      swapTxSigs.push(txSig);
+      txSigs.push(txSig);
+      await wait(2000);
     }
 
-    const targetLeverage = await this.getTargetLeverage();
-    const slotResult = await rpc.getSlot({ commitment: 'confirmed' }).send();
-    const slot = typeof slotResult === 'object' && slotResult !== null ? (slotResult as any).value ?? slotResult : slotResult;
-
-    // Get existing obligation if any
-    const existingObligation = await market.getObligationByWallet(
-      address(this.walletAddress),
-      this.getObligationType(),
+    // Step 2: Initial deposit
+    await market.loadReserves();
+    const depositBase = Math.floor(collAmount * Math.pow(10, this.cfg.collDecimals)).toString();
+    const depositAction = await KaminoAction.buildDepositTxns(
+      market, depositBase, address(this.cfg.collToken), signer,
+      this.getObligationType(), false, undefined,
     );
+    const depositSig = await this.sendKaminoTx(depositAction, rpc, signer);
+    txSigs.push(depositSig);
+    log.info({ collAmount, sig: depositSig }, 'Initial deposit complete');
+    await wait(2000);
 
-    // Price: how much collateral per 1 debt token
-    const collReserve = market.getReserveByMint(address(this.cfg.collToken));
-    const debtReserve = market.getReserveByMint(address(this.cfg.debtToken));
-    if (!collReserve || !debtReserve) throw new Error('Reserves not found');
+    // Step 3-5: Leverage loops (borrow → swap → re-deposit)
+    for (let loop = 0; loop < maxLoops; loop++) {
+      await market.loadReserves();
+      const obl = await market.getObligationByWallet(signer.address, this.getObligationType());
+      if (!obl) break;
 
-    // Use Scope oracle prices from market for price ratio
-    const collPrice = collReserve.getOracleMarketPrice();
-    const debtPrice = debtReserve.getOracleMarketPrice();
-    const priceDebtToColl = debtPrice.div(collPrice);
+      const stats = obl.refreshedStats;
+      const deposited = stats.userTotalDeposit.toNumber();
+      const borrowed = stats.userTotalBorrow.toNumber();
+      const health = borrowed > 0
+        ? stats.borrowLiquidationLimit.div(stats.userTotalBorrow).toNumber()
+        : Infinity;
 
-    log.info(
-      {
-        inputAmount: amount,
-        collAmount,
-        targetLeverage,
-        label: this.cfg.label,
-        priceDebtToColl: priceDebtToColl.toFixed(6),
-        hasExistingPosition: !!existingObligation,
-        swapped: this.needsInputSwap(),
-      },
-      'Multiply deposit starting',
-    );
+      log.info(
+        { loop: loop + 1, deposited, borrowed, health },
+        'Loop status',
+      );
 
-    const depositLamports = new Decimal(collAmount).mul(new Decimal(10).pow(this.cfg.collDecimals));
+      // Stop if near target health
+      if (health !== Infinity && health <= this.cfg.targetHealthRate * 1.02) {
+        log.info({ health, target: this.cfg.targetHealthRate }, 'Target health reached');
+        break;
+      }
 
-    const responses = await getDepositWithLeverageIxs({
-      owner: signer,
-      kaminoMarket: market,
-      collTokenMint: address(this.cfg.collToken),
-      debtTokenMint: address(this.cfg.debtToken),
-      depositAmount: depositLamports,
-      targetLeverage: new Decimal(targetLeverage),
-      priceDebtToColl,
-      slippagePct: new Decimal(0.01), // 1%
-      obligation: existingObligation,
-      obligationTypeTagOverride: ObligationTypeTag.Multiply,
-      referrer: none(),
-      currentSlot: BigInt(slot),
-      selectedTokenMint: address(this.cfg.collToken),
-      scopeRefreshIx: [],
-      quoteBufferBps: new Decimal(10),
-      quoter: this.createQuoter(),
-      swapper: this.createSwapper(),
-      useV2Ixs: false,
-    });
+      // Calculate safe borrow amount
+      const maxBorrow = deposited * maxLtv - borrowed;
+      if (maxBorrow < 1) {
+        log.info('Max borrow too small, stopping');
+        break;
+      }
 
-    // Each response is a separate transaction
-    const txSigs: string[] = [];
-    for (const resp of responses) {
-      const sig = await this.sendIxs(resp.ixs, resp.lookupTables, rpc, signer);
-      txSigs.push(sig);
-      log.info({ sig }, 'Multiply deposit tx sent');
+      // Borrow debtToken
+      await market.loadReserves();
+      const borrowBase = Math.floor(maxBorrow * Math.pow(10, this.cfg.debtDecimals)).toString();
+      const borrowAction = await KaminoAction.buildBorrowTxns(
+        market, borrowBase, address(this.cfg.debtToken), signer,
+        this.getObligationType(), false, undefined,
+      );
+      const borrowSig = await this.sendKaminoTx(borrowAction, rpc, signer);
+      txSigs.push(borrowSig);
+      log.info({ loop: loop + 1, borrowAmount: maxBorrow, sig: borrowSig }, 'Borrow complete');
+      await wait(2000);
+
+      // Swap debtToken → collToken
+      const { outputAmount: swappedColl, txSig: swapSig } = await this.jupiterSwap(
+        this.cfg.debtToken,
+        this.cfg.collToken,
+        maxBorrow,
+        this.cfg.debtDecimals,
+      );
+      txSigs.push(swapSig);
+      log.info({ loop: loop + 1, swappedColl, sig: swapSig }, 'Swap complete');
+      await wait(2000);
+
+      // Re-deposit collToken
+      await market.loadReserves();
+      const reDepositBase = Math.floor(swappedColl * Math.pow(10, this.cfg.collDecimals)).toString();
+      const reDepositAction = await KaminoAction.buildDepositTxns(
+        market, reDepositBase, address(this.cfg.collToken), signer,
+        this.getObligationType(), false, undefined,
+      );
+      const reDepositSig = await this.sendKaminoTx(reDepositAction, rpc, signer);
+      txSigs.push(reDepositSig);
+      log.info({ loop: loop + 1, reDeposited: swappedColl, sig: reDepositSig }, 'Re-deposit complete');
+      await wait(2000);
     }
 
     const finalHealth = await this.getHealthRate();
+    const finalBalance = await this.getBalance();
     log.info(
-      { amount, targetLeverage, txCount: txSigs.length, finalHealth, label: this.cfg.label },
+      {
+        amount,
+        finalHealth,
+        finalBalance,
+        txCount: txSigs.length,
+        label: this.cfg.label,
+      },
       'Multiply deposit complete',
     );
 
@@ -775,103 +897,167 @@ export class KaminoMultiplyLending implements LendingProtocol {
   }
 
   /**
-   * Withdraw from Multiply position, automatically deleveraging.
+   * Withdraw from Multiply position via manual deleverage loop.
+   *
+   * Flow (reverse of deposit):
+   *   1. Withdraw some collToken
+   *   2. Swap collToken → debtToken
+   *   3. Repay debtToken
+   *   4. Repeat 1-3 until fully deleveraged
+   *   5. Withdraw remaining collToken
+   *   6. Swap collToken → inputToken (if needed)
+   *
+   * @param amount - Amount to withdraw in net equity USD terms
    */
   async withdraw(amount: number): Promise<string> {
     const { rpc, signer, market } = await this.ensureInitialized();
-    await market.loadReserves();
 
+    const maxLoops = 6;
+    const txSigs: string[] = [];
+    const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+    await market.loadReserves();
     const obligation = await market.getObligationByWallet(
       address(this.walletAddress),
       this.getObligationType(),
     );
     if (!obligation) throw new Error('No Multiply position found to withdraw from');
 
-    const slotResult = await rpc.getSlot({ commitment: 'confirmed' }).send();
-    const slot = typeof slotResult === 'object' && slotResult !== null ? (slotResult as any).value ?? slotResult : slotResult;
-
     const stats = obligation.refreshedStats;
-    const deposited = stats.userTotalDeposit;
-    const borrowed = stats.userTotalBorrow;
-    const netValue = deposited.minus(borrowed);
-
-    const isClosingPosition = new Decimal(amount).gte(netValue.mul(0.99));
-
-    const collReserve = market.getReserveByMint(address(this.cfg.collToken));
-    const debtReserve = market.getReserveByMint(address(this.cfg.debtToken));
-    if (!collReserve || !debtReserve) throw new Error('Reserves not found');
-
-    const collPrice = collReserve.getOracleMarketPrice();
-    const debtPrice = debtReserve.getOracleMarketPrice();
-    const priceCollToDebt = collPrice.div(debtPrice);
-
-    const withdrawLamports = new Decimal(amount).mul(new Decimal(10).pow(this.cfg.collDecimals));
-
-    // Get SOL balance for fee calculation
-    const solBalResult = await rpc
-      .getBalance(address(this.walletAddress), { commitment: 'confirmed' })
-      .send();
-    const solBalance = typeof solBalResult === 'object' && solBalResult !== null ? (solBalResult as any).value ?? solBalResult : solBalResult;
+    const netValue = stats.userTotalDeposit.minus(stats.userTotalBorrow).toNumber();
+    const isFullWithdraw = amount >= netValue * 0.99;
 
     log.info(
-      { amount, isClosingPosition, deposited: deposited.toFixed(2), borrowed: borrowed.toFixed(2), label: this.cfg.label },
-      'Multiply withdraw starting',
+      {
+        amount,
+        isFullWithdraw,
+        deposited: stats.userTotalDeposit.toFixed(2),
+        borrowed: stats.userTotalBorrow.toFixed(2),
+        label: this.cfg.label,
+      },
+      'Multiply withdraw starting (manual loop)',
     );
 
-    const responses = await getWithdrawWithLeverageIxs({
-      owner: signer,
-      kaminoMarket: market,
-      collTokenMint: address(this.cfg.collToken),
-      debtTokenMint: address(this.cfg.debtToken),
-      obligation,
-      deposited,
-      borrowed,
-      withdrawAmount: withdrawLamports,
-      priceCollToDebt,
-      slippagePct: new Decimal(0.01),
-      isClosingPosition,
-      selectedTokenMint: address(this.cfg.collToken),
-      referrer: none(),
-      currentSlot: BigInt(slot),
-      scopeRefreshIx: [],
-      quoteBufferBps: new Decimal(10),
-      quoter: this.createQuoter(),
-      swapper: this.createSwapper(),
-      useV2Ixs: false,
-      budgetAndPriorityFeeIxs: [],
-      userSolBalanceLamports: Number(solBalance),
-    });
+    // Deleverage loops: withdraw collateral → swap → repay debt
+    for (let loop = 0; loop < maxLoops; loop++) {
+      await market.loadReserves();
+      const obl = await market.getObligationByWallet(signer.address, this.getObligationType());
+      if (!obl) break;
 
-    const txSigs: string[] = [];
-    for (const resp of responses) {
-      const sig = await this.sendIxs(resp.ixs, resp.lookupTables, rpc, signer);
-      txSigs.push(sig);
-      log.info({ sig }, 'Multiply withdraw tx sent');
+      const oblStats = obl.refreshedStats;
+      const totalBorrow = oblStats.userTotalBorrow.toNumber();
+      if (totalBorrow < 1) break; // no debt left
+
+      const totalDeposit = oblStats.userTotalDeposit.toNumber();
+      const withdrawRatio = isFullWithdraw ? 1 : Math.min(amount / netValue, 1);
+
+      // Calculate repay chunk
+      const repayTarget = isFullWithdraw ? totalBorrow : totalBorrow * withdrawRatio * 1.1;
+      const repayAmount = Math.min(repayTarget, totalBorrow);
+      const withdrawForRepay = Math.ceil(repayAmount * 1.005); // 0.5% buffer for swap
+
+      log.info(
+        { loop: loop + 1, totalDeposit, totalBorrow, withdrawForRepay, repayAmount },
+        'Deleverage loop',
+      );
+
+      // 1. Withdraw collToken
+      await market.loadReserves();
+      const withdrawBase = Math.floor(withdrawForRepay * Math.pow(10, this.cfg.collDecimals)).toString();
+      const withdrawAction = await KaminoAction.buildWithdrawTxns(
+        market, withdrawBase, address(this.cfg.collToken), signer,
+        this.getObligationType(), false, undefined,
+      );
+      const withdrawSig = await this.sendKaminoTx(withdrawAction, rpc, signer);
+      txSigs.push(withdrawSig);
+      await wait(2000);
+
+      // 2. Swap collToken → debtToken
+      const { outputAmount: debtForRepay, txSig: swapSig } = await this.jupiterSwap(
+        this.cfg.collToken,
+        this.cfg.debtToken,
+        withdrawForRepay,
+        this.cfg.collDecimals,
+      );
+      txSigs.push(swapSig);
+      await wait(2000);
+
+      // 3. Repay debtToken
+      await market.loadReserves();
+      const repayBase = Math.floor(debtForRepay * Math.pow(10, this.cfg.debtDecimals)).toString();
+
+      // buildRepayTxns requires currentSlot
+      const slotResult = await rpc.getSlot({ commitment: 'confirmed' }).send();
+      const currentSlot = typeof slotResult === 'object' && slotResult !== null
+        ? (slotResult as any).value ?? slotResult : slotResult;
+
+      const repayAction = await KaminoAction.buildRepayTxns(
+        market, repayBase, address(this.cfg.debtToken), signer,
+        this.getObligationType(), false, undefined, BigInt(currentSlot),
+      );
+      const repaySig = await this.sendKaminoTx(repayAction, rpc, signer);
+      txSigs.push(repaySig);
+      log.info({ loop: loop + 1, repaid: debtForRepay, sig: repaySig }, 'Repay complete');
+      await wait(2000);
     }
 
-    // Post-withdraw swap: collToken → inputToken if needed
-    if (this.needsInputSwap()) {
-      // Withdraw gives us collToken (e.g. ONyc), swap back to inputToken (e.g. USDC)
-      // Use the withdrawn amount (approximate — actual amount may differ slightly)
-      log.info(
-        { from: this.cfg.collToken.slice(0, 8), to: this.cfg.inputToken!.slice(0, 8), amount },
-        'Post-withdraw swap: collToken → inputToken',
-      );
-      try {
-        const { txSig: swapSig } = await this.jupiterSwap(
-          this.cfg.collToken,
-          this.cfg.inputToken!,
-          amount, // approximate: withdraw amount in collToken units
-          this.cfg.collDecimals,
+    // Final: withdraw requested amount of collateral
+    await market.loadReserves();
+    const finalObl = await market.getObligationByWallet(signer.address, this.getObligationType());
+    if (finalObl) {
+      const finalDeposited = finalObl.refreshedStats.userTotalDeposit.toNumber();
+      const finalBorrowed = finalObl.refreshedStats.userTotalBorrow.toNumber();
+      const withdrawableNet = finalDeposited - finalBorrowed;
+      const finalWithdrawAmount = isFullWithdraw ? withdrawableNet : Math.min(amount, withdrawableNet);
+
+      if (finalWithdrawAmount > 0.01) {
+        await market.loadReserves();
+        const finalBase = Math.floor(finalWithdrawAmount * Math.pow(10, this.cfg.collDecimals)).toString();
+        const finalAction = await KaminoAction.buildWithdrawTxns(
+          market, finalBase, address(this.cfg.collToken), signer,
+          this.getObligationType(), false, undefined,
         );
-        txSigs.push(swapSig);
+        const finalSig = await this.sendKaminoTx(finalAction, rpc, signer);
+        txSigs.push(finalSig);
+        log.info({ withdrawn: finalWithdrawAmount, sig: finalSig }, 'Final withdrawal complete');
+        await wait(2000);
+      }
+    }
+
+    // Post-withdraw: swap collToken → inputToken if needed
+    if (this.needsInputSwap()) {
+      try {
+        // Get actual collToken balance in wallet
+        const { Connection, PublicKey } = await import('@solana/web3.js');
+        const conn = new Connection(this.rpcUrl!, 'confirmed');
+        const tokenAccounts = await conn.getParsedTokenAccountsByOwner(
+          new PublicKey(this.walletAddress),
+          { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') },
+        );
+        const collAccount = tokenAccounts.value.find(
+          t => t.account.data.parsed.info.mint === this.cfg.collToken,
+        );
+        const collBalance = collAccount
+          ? parseFloat(collAccount.account.data.parsed.info.tokenAmount.uiAmountString)
+          : 0;
+
+        if (collBalance > 0.001) {
+          log.info({ collBalance, to: this.cfg.inputToken!.slice(0, 8) }, 'Post-withdraw swap');
+          const { txSig: swapSig } = await this.jupiterSwap(
+            this.cfg.collToken,
+            this.cfg.inputToken!,
+            collBalance,
+            this.cfg.collDecimals,
+          );
+          txSigs.push(swapSig);
+        }
       } catch (err) {
-        log.error({ error: (err as Error).message }, 'Post-withdraw swap failed — collToken remains in wallet');
+        log.error({ error: (err as Error).message }, 'Post-withdraw swap failed');
       }
     }
 
     log.info(
-      { amount, isClosingPosition, txCount: txSigs.length, label: this.cfg.label },
+      { amount, isFullWithdraw, txCount: txSigs.length, label: this.cfg.label },
       'Multiply withdraw complete',
     );
 

@@ -12,7 +12,6 @@ export function useFr(limit = 504) {
 }
 
 const BINANCE_FAPI = 'https://fapi.binance.com';
-const DRIFT_API = 'https://data.api.drift.trade';
 
 async function fetchBinanceFrHistory(months: number): Promise<FundingRateData[]> {
   const startTime = Date.now() - months * 30 * 24 * 60 * 60 * 1000;
@@ -28,47 +27,10 @@ async function fetchBinanceFrHistory(months: number): Promise<FundingRateData[]>
   }));
 }
 
-async function fetchDriftFrHistory(months: number): Promise<FundingRateData[]> {
-  const startTime = Date.now() - months * 30 * 24 * 60 * 60 * 1000;
-  const res = await fetch(`${DRIFT_API}/fundingRates?marketIndex=0`);
-  if (!res.ok) throw new Error('Failed to fetch FR history from Drift');
-  const json = await res.json();
-  // API returns { fundingRates: [...] }
-  const records: any[] = json.fundingRates ?? json;
-  return records
-    .filter((d) => {
-      const ts = parseInt(d.ts) * 1000;
-      return ts >= startTime;
-    })
-    .map((d) => {
-      // Drift fundingRate is absolute (USD per SOL per hour), not a percentage.
-      // Divide by oraclePriceTwap to get a percentage rate comparable to Binance.
-      const rawFr = parseInt(d.fundingRate);
-      const oracle = parseInt(d.oraclePriceTwap);
-      const frPct = oracle > 0 ? (rawFr / 1e9) / (oracle / 1e6) : 0;
-      return {
-        symbol: 'SOL-PERP',
-        fundingRate: frPct,
-        fundingTime: parseInt(d.ts) * 1000,
-      };
-    });
-}
-
-export function useFrHistory(months = 3, exchange: string = 'binance') {
+export function useFrHistory(months = 3) {
   return useSWR<FundingRateData[]>(
-    ['fr-history', months, exchange],
-    () => exchange === 'drift'
-      ? fetchDriftFrHistory(months)
-      : fetchBinanceFrHistory(months),
+    ['fr-history', months],
+    () => fetchBinanceFrHistory(months),
     { refreshInterval: 5 * 60 * 1000 } // 5min
-  );
-}
-
-/** Returns the perp exchange currently configured on the bot. */
-export function useActivePerpExchange() {
-  return useSWR<{ perpExchange: string }>(
-    'config',
-    () => apiFetch<{ perpExchange: string }>('/config').catch(() => ({ perpExchange: 'binance' })),
-    { refreshInterval: 0, revalidateOnFocus: false, fallbackData: { perpExchange: 'binance' } }
   );
 }

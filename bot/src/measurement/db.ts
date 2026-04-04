@@ -32,6 +32,8 @@ const SCHEMA_SQL = `
     total_nav_usdc REAL NOT NULL,
     lending_balance REAL,
     lending_breakdown TEXT,
+    multiply_balance REAL DEFAULT 0,
+    multiply_breakdown TEXT DEFAULT '{}',
     dawnsol_balance REAL,
     dawnsol_usdc_value REAL,
     binance_usdc_balance REAL,
@@ -103,6 +105,18 @@ export function initDb(): Database.Database {
   // Migrate: add buffer_usdc_balance column for existing databases
   try {
     database.exec('ALTER TABLE snapshots ADD COLUMN buffer_usdc_balance REAL DEFAULT 0');
+  } catch {
+    // Column already exists — ignore
+  }
+
+  // Migrate: add multiply columns for existing databases
+  try {
+    database.exec('ALTER TABLE snapshots ADD COLUMN multiply_balance REAL DEFAULT 0');
+  } catch {
+    // Column already exists — ignore
+  }
+  try {
+    database.exec("ALTER TABLE snapshots ADD COLUMN multiply_breakdown TEXT DEFAULT '{}'");
   } catch {
     // Column already exists — ignore
   }

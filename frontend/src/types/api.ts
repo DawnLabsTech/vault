@@ -22,6 +22,8 @@ export interface PortfolioSnapshot {
   totalNavUsdc: number;
   lendingBalance: number;
   lendingBreakdown: Record<string, number>;
+  multiplyBalance: number;
+  multiplyBreakdown: Record<string, number>;
   bufferUsdcBalance: number;
   dawnsolBalance: number;
   dawnsolUsdcValue: number;

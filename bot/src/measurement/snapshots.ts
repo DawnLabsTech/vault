@@ -12,11 +12,13 @@ function getInsertStmt() {
     stmtInsert = getDb().prepare(`
       INSERT INTO snapshots (
         timestamp, total_nav_usdc, lending_balance, lending_breakdown,
+        multiply_balance, multiply_breakdown,
         dawnsol_balance, dawnsol_usdc_value, binance_usdc_balance,
         buffer_usdc_balance, binance_perp_unrealized_pnl, binance_perp_size,
         state, sol_price, dawnsol_price
       ) VALUES (
         @timestamp, @totalNavUsdc, @lendingBalance, @lendingBreakdown,
+        @multiplyBalance, @multiplyBreakdown,
         @dawnsolBalance, @dawnsolUsdcValue, @binanceUsdcBalance,
         @bufferUsdcBalance, @binancePerpUnrealizedPnl, @binancePerpSize,
         @state, @solPrice, @dawnsolPrice
@@ -44,6 +46,8 @@ function snapshotToRow(snapshot: PortfolioSnapshot) {
     totalNavUsdc: snapshot.totalNavUsdc,
     lendingBalance: snapshot.lendingBalance,
     lendingBreakdown: JSON.stringify(snapshot.lendingBreakdown),
+    multiplyBalance: snapshot.multiplyBalance,
+    multiplyBreakdown: JSON.stringify(snapshot.multiplyBreakdown),
     dawnsolBalance: snapshot.dawnsolBalance,
     dawnsolUsdcValue: snapshot.dawnsolUsdcValue,
     binanceUsdcBalance: snapshot.binanceUsdcBalance,
@@ -62,6 +66,8 @@ function rowToSnapshot(row: Record<string, unknown>): PortfolioSnapshot {
     totalNavUsdc: row['total_nav_usdc'] as number,
     lendingBalance: row['lending_balance'] as number,
     lendingBreakdown: JSON.parse((row['lending_breakdown'] as string) || '{}') as Record<string, number>,
+    multiplyBalance: (row['multiply_balance'] as number) ?? 0,
+    multiplyBreakdown: JSON.parse((row['multiply_breakdown'] as string) || '{}') as Record<string, number>,
     dawnsolBalance: row['dawnsol_balance'] as number,
     dawnsolUsdcValue: row['dawnsol_usdc_value'] as number,
     binanceUsdcBalance: row['binance_usdc_balance'] as number,

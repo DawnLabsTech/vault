@@ -53,6 +53,8 @@ export interface PortfolioSnapshot {
   totalNavUsdc: number;
   lendingBalance: number;
   lendingBreakdown: Record<string, number>; // protocol -> balance
+  multiplyBalance: number;
+  multiplyBreakdown: Record<string, number>; // label -> balance
   dawnsolBalance: number;
   dawnsolUsdcValue: number;
   bufferUsdcBalance: number;
