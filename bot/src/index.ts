@@ -251,7 +251,8 @@ async function main(): Promise<void> {
   apiServer.setMultiplyAdapters(kaminoMultiplyAdapters);
   apiServer.setMarketScanner(marketScanner);
   apiServer.setPerpExchange(perpExchange);
-  apiServer.start(3000);
+  const apiPort = Number.parseInt(process.env.API_PORT || '3000', 10);
+  apiServer.start(Number.isFinite(apiPort) ? apiPort : 3000);
 
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
