@@ -181,4 +181,69 @@ describe('pnl external flow adjustments', () => {
 
     expect(summary.totalReturn).toBeCloseTo(0.01, 8);
   });
+
+  it('ignores internal rebalance events that happen after the last snapshot of the day', async () => {
+    snapshots = [
+      {
+        timestamp: '2026-04-04T17:04:02.163Z',
+        totalNavUsdc: 100.084127683101,
+        lendingBalance: 0.000196,
+        lendingBreakdown: { kamino: 0.000196 },
+        multiplyBalance: 50.0839316831008,
+        multiplyBreakdown: { 'ONyc/USDC': 50.0839316831008 },
+        dawnsolBalance: 0,
+        dawnsolUsdcValue: 0,
+        bufferUsdcBalance: 50,
+        binanceUsdcBalance: 0,
+        binancePerpUnrealizedPnl: 0,
+        binancePerpSize: 0,
+        state: 'BASE_ONLY',
+        solPrice: 100,
+        dawnsolPrice: 100,
+      },
+      {
+        timestamp: '2026-04-04T17:04:10.089Z',
+        totalNavUsdc: 100.083930380723,
+        lendingBalance: 0,
+        lendingBreakdown: {},
+        multiplyBalance: 50.0839303807228,
+        multiplyBreakdown: { 'ONyc/USDC': 50.0839303807228 },
+        dawnsolBalance: 0,
+        dawnsolUsdcValue: 0,
+        bufferUsdcBalance: 50,
+        binanceUsdcBalance: 0,
+        binancePerpUnrealizedPnl: 0,
+        binancePerpSize: 0,
+        state: 'BASE_ONLY',
+        solPrice: 100,
+        dawnsolPrice: 100,
+      },
+    ];
+
+    events = [
+      {
+        timestamp: '2026-04-04T17:04:14.154Z',
+        eventType: 'deposit' as const,
+        amount: 17.998396,
+        asset: 'USDC',
+        fee: 0.000005,
+        sourceProtocol: 'kamino',
+        metadata: { action: 'rebalance_deposit', previousBalance: 0 },
+      },
+      {
+        timestamp: '2026-04-04T17:04:17.136Z',
+        eventType: 'deposit' as const,
+        amount: 26.997398,
+        asset: 'USDC',
+        fee: 0.000005,
+        sourceProtocol: 'jupiter',
+        metadata: { action: 'rebalance_deposit', previousBalance: 0.000196 },
+      },
+    ];
+
+    const { getPerformanceSummary } = await import('../../src/measurement/pnl.js');
+    const summary = getPerformanceSummary();
+
+    expect(summary.totalReturn).toBe(-0.000001);
+  });
 });

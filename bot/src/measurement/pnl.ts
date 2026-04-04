@@ -197,8 +197,11 @@ function calculateDailyPnlForDate(date: string): DailyPnL {
     if (snap.totalNavUsdc < navLow) navLow = snap.totalNavUsdc;
   }
 
-  // Get events for the day
-  const dayEvents = getEvents({ from: dayStart, to: dayEnd });
+  // Only attribute flows and PnL events that occur within the observed snapshot window.
+  // This prevents post-snapshot rebalance events from distorting the day's return.
+  const eventWindowStart = startSnapshot?.timestamp ?? dayStart;
+  const eventWindowEnd = endSnapshot?.timestamp ?? dayEnd;
+  const dayEvents = getEvents({ from: eventWindowStart, to: eventWindowEnd });
   const netExternalFlow = estimateExternalUsdcFlow(daySnapshots, dayEvents);
 
   // Revenue aggregation
