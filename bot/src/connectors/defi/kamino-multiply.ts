@@ -58,6 +58,17 @@ async function getRewardTokenPrice(mint: string): Promise<number> {
   }
 }
 
+export function calculateDailyCapRemaining(
+  capCapacity: Decimal,
+  capCurrent: Decimal,
+  decimals: number,
+): number {
+  return capCapacity
+    .sub(capCurrent)
+    .div(new Decimal(10).pow(decimals))
+    .toNumber();
+}
+
 export interface KaminoMultiplyConfig {
   /** Kamino market address */
   market: string;
@@ -490,9 +501,11 @@ export class KaminoMultiplyLending implements LendingProtocol {
         const capCurrent = collReserve.getDepositWithdrawalCapCurrent(BigInt(slot));
         const capCapacity = collReserve.getDepositWithdrawalCapCapacity();
         if (capCapacity.gt(0)) {
-          dailyCapRemaining = capCurrent
-            .div(new Decimal(10).pow(this.cfg.collDecimals))
-            .toNumber();
+          dailyCapRemaining = calculateDailyCapRemaining(
+            capCapacity,
+            capCurrent,
+            this.cfg.collDecimals,
+          );
         }
       } catch { /* no daily cap configured */ }
 
