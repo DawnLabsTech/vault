@@ -45,3 +45,6 @@ coverage/
 # Bot data & logs
 data/
 logs/
+
+# Claude Code
+CLAUDE.md
