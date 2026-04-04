@@ -80,7 +80,13 @@ export async function getOnycApy(
   rpcUrl: string,
   onycMint: string,
   fallback: number = 0,
-): Promise<{ apy: number; apr: number; source: 'onchain' | 'fallback' }> {
+): Promise<{
+  apy: number;
+  apr: number;
+  source: 'onchain' | 'fallback';
+  basePrice?: number;
+  tokenInMint?: string;
+}> {
   return withRetry(async () => {
     const conn = new Connection(rpcUrl, 'confirmed');
     let onycPubkey: PublicKey;
@@ -119,7 +125,13 @@ export async function getOnycApy(
             'ONyc APY fetched from on-chain',
           );
 
-          return { apy: apyDecimal, apr: aprDecimal, source: 'onchain' as const };
+          return {
+            apy: apyDecimal,
+            apr: aprDecimal,
+            source: 'onchain' as const,
+            basePrice: active.basePrice / 1e9,
+            tokenInMint: stableMint.toBase58(),
+          };
         }
       } catch (err) {
         log.debug(

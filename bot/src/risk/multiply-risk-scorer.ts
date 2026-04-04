@@ -18,8 +18,10 @@ import { KaminoMarket, DEFAULT_RECENT_SLOT_DURATION_MS } from '@kamino-finance/k
 import { createSolanaRpc, address } from '@solana/kit';
 import Decimal from 'decimal.js';
 import type Database from 'better-sqlite3';
+import { getOnycApy, isOnycToken } from '../connectors/defi/onre-apy.js';
 import type {
   MultiplyCandidate,
+  RiskDimensionDetails,
   RiskDimensionScores,
   RiskAssessment,
   RiskAlertLevel,
@@ -74,6 +76,11 @@ function parseJupiterUsdPrice(value: unknown): number {
   if (!value || typeof value !== 'object') return 0;
   const entry = value as { usdPrice?: number | string; price?: number | string };
   return parseFloat(String(entry.usdPrice ?? entry.price ?? '0'));
+}
+
+interface DimensionResult<TDetails> {
+  score: number;
+  details: TDetails;
 }
 
 /** Standard deviation of an array of numbers */
@@ -197,7 +204,7 @@ export class MultiplyRiskScorer {
     maxPositionCapUsd: number = 10_000,
   ): Promise<RiskAssessment> {
     const now = Date.now();
-    const dimensions = await this.computeDimensions(candidate, maxPositionCapUsd);
+    const { dimensions, details } = await this.computeDimensions(candidate, maxPositionCapUsd);
     const w = this.config.weights;
 
     const rawScore =
@@ -218,7 +225,8 @@ export class MultiplyRiskScorer {
       label: candidate.label,
       compositeScore,
       dimensions,
-      riskPenalty: MultiplyRiskScorer.scoreToRiskPenalty(compositeScore),
+      details,
+      riskPenalty: 0,
       targetHealthRate: MultiplyRiskScorer.scoreToHealthRate(compositeScore),
       maxPositionCap: MultiplyRiskScorer.scoreToPositionCap(compositeScore, maxPositionCapUsd),
       alertLevel: MultiplyRiskScorer.scoreToAlertLevel(compositeScore),
@@ -236,7 +244,6 @@ export class MultiplyRiskScorer {
         d2: dimensions.liquidationProximity.toFixed(1),
         d3: dimensions.exitLiquidity.toFixed(1),
         d4: dimensions.reservePressure.toFixed(1),
-        penalty: `${(assessment.riskPenalty * 100).toFixed(2)}%`,
         healthTarget: assessment.targetHealthRate.toFixed(2),
         alert: assessment.alertLevel,
       },
@@ -263,7 +270,7 @@ export class MultiplyRiskScorer {
   private async computeDimensions(
     candidate: MultiplyCandidate,
     maxPositionCapUsd: number,
-  ): Promise<RiskDimensionScores> {
+  ): Promise<{ dimensions: RiskDimensionScores; details: RiskDimensionDetails }> {
     // Fetch prices once, shared by D1 (depegRisk) and D2 (liquidationProximity)
     const prices = await this.fetchPrices(candidate.collToken, candidate.debtToken).catch((err) => {
       log.warn({ label: candidate.label, error: (err as Error).message }, 'Shared Jupiter price fetch failed');
@@ -274,23 +281,88 @@ export class MultiplyRiskScorer {
       await Promise.all([
         this.calcDepegRisk(candidate, prices).catch((err) => {
           log.warn({ label: candidate.label, error: (err as Error).message }, 'D1 depeg risk failed');
-          return 50; // conservative default
+          return {
+            score: 50,
+            details: {
+              collPriceUsd: prices.collPrice,
+              debtPriceUsd: prices.debtPrice,
+              marketRate: prices.debtPrice > 0 ? prices.collPrice / prices.debtPrice : 0,
+              expectedRate: 0,
+              deviationBps: 0,
+              spotScore: 50,
+              volatility24hBps: 0,
+              volatility24hScore: 50,
+              volatilitySampleCount: 0,
+              tailRisk7dBps: 0,
+              tailRisk7dScore: 50,
+              tailRiskSampleCount: 0,
+            },
+          };
         }),
         this.calcLiquidationProximity(candidate, prices).catch((err) => {
           log.warn({ label: candidate.label, error: (err as Error).message }, 'D2 liquidation proximity failed');
-          return 50;
+          return {
+            score: 50,
+            details: {
+              liquidationLtv: 0,
+              targetHealthRate: candidate.targetHealthRate ?? DEFAULT_TARGET_HEALTH_RATE,
+              targetLeverage: 0,
+              marketRate: prices.debtPrice > 0 ? prices.collPrice / prices.debtPrice : 0,
+              simulatedHealthRate: 0,
+              stressedMarketRate: 0,
+              stressedHealthRate: 0,
+              baseScore: 50,
+              stressScore: 50,
+            },
+          };
         }),
         this.calcExitLiquidity(candidate, maxPositionCapUsd).catch((err) => {
           log.warn({ label: candidate.label, error: (err as Error).message }, 'D3 exit liquidity failed');
-          return 50;
+          return {
+            score: 50,
+            details: {
+              assumedExitUsd: maxPositionCapUsd,
+              quoteInputAmount: 0,
+              priceImpactPct: 0,
+              slippageBps: 0,
+            },
+          };
         }),
         this.calcReservePressure(candidate).catch((err) => {
           log.warn({ label: candidate.label, error: (err as Error).message }, 'D4 reserve pressure failed');
-          return 50;
+          return {
+            score: 50,
+            details: {
+              collateralUtilizationRatio: 0,
+              debtUtilizationRatio: 0,
+              weightedUtilizationRatio: 0,
+              utilizationScore: 50,
+              depositLimit: 0,
+              totalSupply: 0,
+              remainingCapacity: 0,
+              capacityRatio: 0,
+              capacityPenalty: 0,
+              marketTvlUsd: 0,
+              tvlPenalty: 0,
+            },
+          };
         }),
       ]);
 
-    return { depegRisk, liquidationProximity, exitLiquidity, reservePressure };
+    return {
+      dimensions: {
+        depegRisk: depegRisk.score,
+        liquidationProximity: liquidationProximity.score,
+        exitLiquidity: exitLiquidity.score,
+        reservePressure: reservePressure.score,
+      },
+      details: {
+        depegRisk: depegRisk.details,
+        liquidationProximity: liquidationProximity.details,
+        exitLiquidity: exitLiquidity.details,
+        reservePressure: reservePressure.details,
+      },
+    };
   }
 
   /** Fetch collateral and debt prices from Jupiter (shared by D1 and D2) */
@@ -312,42 +384,82 @@ export class MultiplyRiskScorer {
   private async calcDepegRisk(
     candidate: MultiplyCandidate,
     prices: { collPrice: number; debtPrice: number },
-  ): Promise<number> {
+  ): Promise<DimensionResult<RiskDimensionDetails['depegRisk']>> {
     const { collPrice, debtPrice } = prices;
 
     if (collPrice === 0 || debtPrice === 0) {
       log.warn({ collPrice, debtPrice, label: candidate.label }, 'Missing price data');
-      return 50;
+      return {
+        score: 50,
+        details: {
+          collPriceUsd: collPrice,
+          debtPriceUsd: debtPrice,
+          marketRate: 0,
+          expectedRate: 0,
+          deviationBps: 0,
+          spotScore: 50,
+          volatility24hBps: 0,
+          volatility24hScore: 50,
+          volatilitySampleCount: 0,
+          tailRisk7dBps: 0,
+          tailRisk7dScore: 50,
+          tailRiskSampleCount: 0,
+        },
+      };
     }
 
     const marketRate = collPrice / debtPrice;
-    const expectedRate = 1.0;
-    const deviationBps = Math.abs(marketRate - expectedRate) / expectedRate * 10_000;
+    const [collReferenceUsd, debtReferenceUsd] = await Promise.all([
+      this.getReferencePriceUsd(candidate.collToken, collPrice),
+      this.getReferencePriceUsd(candidate.debtToken, debtPrice),
+    ]);
+    const expectedRate = debtReferenceUsd > 0 ? collReferenceUsd / debtReferenceUsd : 1.0;
+    const safeExpectedRate = expectedRate > 0 ? expectedRate : 1.0;
+    const deviationBps = Math.abs(marketRate - safeExpectedRate) / safeExpectedRate * 10_000;
 
     // Sub-components
     const spotScore = clamp(deviationBps / this.config.maxDeviationBps * 100);
-    const volScore = this.getPegVolatility24h(candidate.label);
-    const tailScore = this.getPegTailRisk7d(candidate.label);
+    const volatility24h = this.getPegVolatility24h(candidate.label);
+    const tailRisk7d = this.getPegTailRisk7d(candidate.label);
 
-    const depegRisk = 0.60 * spotScore + 0.25 * volScore + 0.15 * tailScore;
+    const depegRisk = 0.60 * spotScore + 0.25 * volatility24h.score + 0.15 * tailRisk7d.score;
 
     // Store peg deviation for future volatility/tail calculation
     this.storePegDeviation(candidate.label, deviationBps);
+
+    const score = clamp(depegRisk);
 
     log.debug(
       {
         label: candidate.label,
         marketRate: marketRate.toFixed(6),
+        expectedRate: safeExpectedRate.toFixed(6),
         deviationBps: deviationBps.toFixed(1),
         spotScore: spotScore.toFixed(1),
-        volScore: volScore.toFixed(1),
-        tailScore: tailScore.toFixed(1),
-        depegRisk: depegRisk.toFixed(1),
+        volScore: volatility24h.score.toFixed(1),
+        tailScore: tailRisk7d.score.toFixed(1),
+        depegRisk: score.toFixed(1),
       },
       'D1 Depeg risk',
     );
 
-    return clamp(depegRisk);
+    return {
+      score,
+      details: {
+        collPriceUsd: collPrice,
+        debtPriceUsd: debtPrice,
+        marketRate,
+        expectedRate: safeExpectedRate,
+        deviationBps,
+        spotScore,
+        volatility24hBps: volatility24h.bps,
+        volatility24hScore: volatility24h.score,
+        volatilitySampleCount: volatility24h.sampleCount,
+        tailRisk7dBps: tailRisk7d.bps,
+        tailRisk7dScore: tailRisk7d.score,
+        tailRiskSampleCount: tailRisk7d.sampleCount,
+      },
+    };
   }
 
   /**
@@ -357,9 +469,24 @@ export class MultiplyRiskScorer {
   private async calcLiquidationProximity(
     candidate: MultiplyCandidate,
     prices: { collPrice: number; debtPrice: number },
-  ): Promise<number> {
+  ): Promise<DimensionResult<RiskDimensionDetails['liquidationProximity']>> {
     const { collPrice, debtPrice } = prices;
-    if (collPrice === 0 || debtPrice === 0) return 50;
+    if (collPrice === 0 || debtPrice === 0) {
+      return {
+        score: 50,
+        details: {
+          liquidationLtv: 0,
+          targetHealthRate: candidate.targetHealthRate ?? DEFAULT_TARGET_HEALTH_RATE,
+          targetLeverage: 0,
+          marketRate: 0,
+          simulatedHealthRate: 0,
+          stressedMarketRate: 0,
+          stressedHealthRate: 0,
+          baseScore: 50,
+          stressScore: 50,
+        },
+      };
+    }
 
     const market = await this.getOrLoadMarket(candidate.market);
     await market.loadReserves();
@@ -371,7 +498,22 @@ export class MultiplyRiskScorer {
     const liqLtv = typeof liquidationLtv === 'number' ? liquidationLtv : Number(liquidationLtv);
 
     const targetHealth = candidate.targetHealthRate ?? DEFAULT_TARGET_HEALTH_RATE;
-    if (targetHealth <= liqLtv) return 100; // degenerate config
+    if (targetHealth <= liqLtv) {
+      return {
+        score: 100,
+        details: {
+          liquidationLtv: liqLtv,
+          targetHealthRate: targetHealth,
+          targetLeverage: 0,
+          marketRate: collPrice / debtPrice,
+          simulatedHealthRate: 0,
+          stressedMarketRate: 0,
+          stressedHealthRate: 0,
+          baseScore: 100,
+          stressScore: 100,
+        },
+      };
+    }
 
     // Target leverage at perfect peg
     const targetLeverage = targetHealth / (targetHealth - liqLtv);
@@ -400,6 +542,7 @@ export class MultiplyRiskScorer {
       : 100;
 
     const liquidationProximity = 0.70 * baseScore + 0.30 * stressScore;
+    const score = clamp(liquidationProximity);
 
     log.debug(
       {
@@ -410,12 +553,25 @@ export class MultiplyRiskScorer {
         simulatedHealth: simulatedHealth.toFixed(4),
         baseScore: baseScore.toFixed(1),
         stressScore: stressScore.toFixed(1),
-        liquidationProximity: liquidationProximity.toFixed(1),
+        liquidationProximity: score.toFixed(1),
       },
       'D2 Liquidation proximity',
     );
 
-    return clamp(liquidationProximity);
+    return {
+      score,
+      details: {
+        liquidationLtv: liqLtv,
+        targetHealthRate: targetHealth,
+        targetLeverage,
+        marketRate,
+        simulatedHealthRate: simulatedHealth,
+        stressedMarketRate: stressedRate,
+        stressedHealthRate: stressedHealth,
+        baseScore,
+        stressScore,
+      },
+    };
   }
 
   /**
@@ -425,7 +581,7 @@ export class MultiplyRiskScorer {
   private async calcExitLiquidity(
     candidate: MultiplyCandidate,
     positionSizeUsd: number,
-  ): Promise<number> {
+  ): Promise<DimensionResult<RiskDimensionDetails['exitLiquidity']>> {
     const { collToken, debtToken } = candidate;
     const collDecimals = candidate.collDecimals ?? 6;
 
@@ -455,7 +611,15 @@ export class MultiplyRiskScorer {
       'D3 Exit liquidity',
     );
 
-    return score;
+    return {
+      score,
+      details: {
+        assumedExitUsd: positionSizeUsd,
+        quoteInputAmount: amount,
+        priceImpactPct,
+        slippageBps,
+      },
+    };
   }
 
   /**
@@ -464,7 +628,7 @@ export class MultiplyRiskScorer {
    */
   private async calcReservePressure(
     candidate: MultiplyCandidate,
-  ): Promise<number> {
+  ): Promise<DimensionResult<RiskDimensionDetails['reservePressure']>> {
     const market = await this.getOrLoadMarket(candidate.market);
     await market.loadReserves();
 
@@ -527,19 +691,25 @@ export class MultiplyRiskScorer {
       'D4 Reserve pressure',
     );
 
-    return reservePressure;
+    return {
+      score: reservePressure,
+      details: {
+        collateralUtilizationRatio: collUtil,
+        debtUtilizationRatio: debtUtil,
+        weightedUtilizationRatio: weightedUtil,
+        utilizationScore,
+        depositLimit,
+        totalSupply,
+        remainingCapacity: remaining,
+        capacityRatio,
+        capacityPenalty,
+        marketTvlUsd: marketTvl,
+        tvlPenalty,
+      },
+    };
   }
 
   // ── Score → Action Mapping ────────────────────────────────
-
-  /**
-   * Map composite score to APY risk penalty (decimal).
-   * 0 at score<=15, linear up to ~3.4% at score=100.
-   */
-  static scoreToRiskPenalty(score: number): number {
-    if (score <= 15) return 0;
-    return (score - 15) * 0.0004;
-  }
 
   /**
    * Map composite score to target health rate.
@@ -596,6 +766,23 @@ export class MultiplyRiskScorer {
     }
   }
 
+  private async getReferencePriceUsd(mint: string, spotPriceUsd: number): Promise<number> {
+    if (STABLECOIN_MINTS.has(mint)) return 1;
+
+    if (isOnycToken(mint)) {
+      try {
+        const onyc = await getOnycApy(this.rpcUrl, mint, 0);
+        if (onyc.basePrice && onyc.basePrice > 0) {
+          return onyc.basePrice;
+        }
+      } catch (err) {
+        log.warn({ mint, error: (err as Error).message }, 'Failed to fetch ONyc reference price');
+      }
+    }
+
+    return spotPriceUsd > 0 ? spotPriceUsd : await this.getTokenPriceUsd(mint);
+  }
+
   private async fetchJupiterJson<T>(path: string, params: URLSearchParams): Promise<T> {
     const baseUrls = getJupiterApiBaseCandidates();
     let lastError: Error | null = null;
@@ -622,28 +809,36 @@ export class MultiplyRiskScorer {
   }
 
   /** Get 24h peg deviation volatility from stored data */
-  private getPegVolatility24h(label: string): number {
+  private getPegVolatility24h(label: string): { bps: number; score: number; sampleCount: number } {
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const rows = this.db
       .prepare('SELECT peg_deviation_bps FROM multiply_apy_history WHERE label = ? AND timestamp > ? AND peg_deviation_bps IS NOT NULL')
       .all(label, cutoff) as { peg_deviation_bps: number }[];
 
-    if (rows.length < 3) return 50; // cold start default
+    if (rows.length < 3) {
+      return { bps: 0, score: 50, sampleCount: rows.length };
+    }
     const deviations = rows.map((r) => r.peg_deviation_bps);
     const vol = stddev(deviations);
     // Normalize: 50 bps stddev = max score
-    return clamp(vol / 50 * 100);
+    return { bps: vol, score: clamp(vol / 50 * 100), sampleCount: rows.length };
   }
 
   /** Get 7-day max peg deviation (tail risk) */
-  private getPegTailRisk7d(label: string): number {
+  private getPegTailRisk7d(label: string): { bps: number; score: number; sampleCount: number } {
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const row = this.db
-      .prepare('SELECT MAX(peg_deviation_bps) as max_dev FROM multiply_apy_history WHERE label = ? AND timestamp > ? AND peg_deviation_bps IS NOT NULL')
-      .get(label, cutoff) as { max_dev: number | null } | undefined;
+      .prepare('SELECT MAX(peg_deviation_bps) as max_dev, COUNT(*) as sample_count FROM multiply_apy_history WHERE label = ? AND timestamp > ? AND peg_deviation_bps IS NOT NULL')
+      .get(label, cutoff) as { max_dev: number | null; sample_count: number } | undefined;
 
-    if (!row?.max_dev) return 50; // cold start default
-    return clamp(row.max_dev / this.config.maxDeviationBps * 100);
+    if (!row?.max_dev) {
+      return { bps: 0, score: 50, sampleCount: row?.sample_count ?? 0 };
+    }
+    return {
+      bps: row.max_dev,
+      score: clamp(row.max_dev / this.config.maxDeviationBps * 100),
+      sampleCount: row.sample_count,
+    };
   }
 
   /** Store peg deviation for future volatility calculation */
@@ -691,6 +886,52 @@ export class MultiplyRiskScorer {
         exitLiquidity: r.exit_liquidity ?? r.liquidity_depth ?? 0,
         reservePressure: r.reserve_pressure ?? r.reserve_utilization ?? 0,
       },
+      details: {
+        depegRisk: {
+          collPriceUsd: 0,
+          debtPriceUsd: 0,
+          marketRate: 0,
+          expectedRate: 0,
+          deviationBps: 0,
+          spotScore: r.depeg_risk ?? r.peg_stability ?? 0,
+          volatility24hBps: 0,
+          volatility24hScore: 0,
+          volatilitySampleCount: 0,
+          tailRisk7dBps: 0,
+          tailRisk7dScore: 0,
+          tailRiskSampleCount: 0,
+        },
+        liquidationProximity: {
+          liquidationLtv: 0,
+          targetHealthRate: r.target_health_rate,
+          targetLeverage: 0,
+          marketRate: 0,
+          simulatedHealthRate: 0,
+          stressedMarketRate: 0,
+          stressedHealthRate: 0,
+          baseScore: 0,
+          stressScore: 0,
+        },
+        exitLiquidity: {
+          assumedExitUsd: 0,
+          quoteInputAmount: 0,
+          priceImpactPct: 0,
+          slippageBps: 0,
+        },
+        reservePressure: {
+          collateralUtilizationRatio: 0,
+          debtUtilizationRatio: 0,
+          weightedUtilizationRatio: 0,
+          utilizationScore: 0,
+          depositLimit: 0,
+          totalSupply: 0,
+          remainingCapacity: 0,
+          capacityRatio: 0,
+          capacityPenalty: 0,
+          marketTvlUsd: 0,
+          tvlPenalty: 0,
+        },
+      },
       riskPenalty: r.risk_penalty,
       targetHealthRate: r.target_health_rate,
       maxPositionCap: r.max_position_cap,
@@ -710,5 +951,9 @@ export class MultiplyRiskScorer {
 
     if (rows.length === 0) return false;
     return currentScore - rows[0]!.composite_score > 15;
+  }
+
+  getRejectThreshold(): number {
+    return this.config.rejectThreshold;
   }
 }

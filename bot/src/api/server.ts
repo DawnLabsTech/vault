@@ -253,6 +253,52 @@ export class ApiServer {
           exitLiquidity: number;
           reservePressure: number;
         };
+        details: {
+          depegRisk: {
+            collPriceUsd: number;
+            debtPriceUsd: number;
+            marketRate: number;
+            expectedRate: number;
+            deviationBps: number;
+            spotScore: number;
+            volatility24hBps: number;
+            volatility24hScore: number;
+            volatilitySampleCount: number;
+            tailRisk7dBps: number;
+            tailRisk7dScore: number;
+            tailRiskSampleCount: number;
+          };
+          liquidationProximity: {
+            liquidationLtv: number;
+            targetHealthRate: number;
+            targetLeverage: number;
+            marketRate: number;
+            simulatedHealthRate: number;
+            stressedMarketRate: number;
+            stressedHealthRate: number;
+            baseScore: number;
+            stressScore: number;
+          };
+          exitLiquidity: {
+            assumedExitUsd: number;
+            quoteInputAmount: number;
+            priceImpactPct: number;
+            slippageBps: number;
+          };
+          reservePressure: {
+            collateralUtilizationRatio: number;
+            debtUtilizationRatio: number;
+            weightedUtilizationRatio: number;
+            utilizationScore: number;
+            depositLimit: number;
+            totalSupply: number;
+            remainingCapacity: number;
+            capacityRatio: number;
+            capacityPenalty: number;
+            marketTvlUsd: number;
+            tvlPenalty: number;
+          };
+        };
         riskPenalty: number;
         targetHealthRate: number;
         maxPositionCap: number;
@@ -300,6 +346,7 @@ export class ApiServer {
       riskAssessment: s.riskAssessment ? {
         compositeScore: s.riskAssessment.compositeScore,
         dimensions: s.riskAssessment.dimensions,
+        details: s.riskAssessment.details,
         riskPenalty: s.riskAssessment.riskPenalty,
         targetHealthRate: s.riskAssessment.targetHealthRate,
         maxPositionCap: s.riskAssessment.maxPositionCap,

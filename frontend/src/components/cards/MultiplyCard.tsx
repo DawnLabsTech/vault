@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useMultiply } from '@/hooks/useMultiply';
 import { CardSkeleton } from '@/components/shared/Skeleton';
-import { formatUsd } from '@/lib/format';
+import { formatNumber, formatUsd } from '@/lib/format';
 import type { MultiplyPosition, RiskAssessmentData } from '@/types/api';
 
 function formatApy(apy: number): string {
@@ -74,7 +74,42 @@ const DIMENSION_DESCRIPTIONS: Record<string, string> = {
   reservePressure: 'Kamino reserve utilization + capacity + TVL floor. Higher = more protocol stress.',
 };
 
-function RiskDimensionBar({ name, score }: { name: string; score: number }) {
+function formatBps(value: number): string {
+  return `${value.toFixed(0)} bps`;
+}
+
+function formatPctPoints(value: number): string {
+  return `${value.toFixed(2)}%`;
+}
+
+function formatRatioPct(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function dimensionExplain(key: string, risk: RiskAssessmentData): string {
+  switch (key) {
+    case 'depegRisk': {
+      const d = risk.details.depegRisk;
+      return `Market ${formatNumber(d.marketRate, 4)} vs ref ${formatNumber(d.expectedRate, 4)}; dev ${formatBps(d.deviationBps)}; 24h vol ${formatBps(d.volatility24hBps)}; 7d tail ${formatBps(d.tailRisk7dBps)}.`;
+    }
+    case 'liquidationProximity': {
+      const d = risk.details.liquidationProximity;
+      return `Liq LTV ${formatRatioPct(d.liquidationLtv)}; target lev ${formatNumber(d.targetLeverage, 2)}x; health ${formatNumber(d.simulatedHealthRate, 3)}; stress ${formatNumber(d.stressedHealthRate, 3)}.`;
+    }
+    case 'exitLiquidity': {
+      const d = risk.details.exitLiquidity;
+      return `Assumed exit ${formatUsd(d.assumedExitUsd, 0)}; price impact ${formatPctPoints(d.priceImpactPct)}; slippage ${formatBps(d.slippageBps)}.`;
+    }
+    case 'reservePressure': {
+      const d = risk.details.reservePressure;
+      return `Weighted util ${formatRatioPct(d.weightedUtilizationRatio)}; remaining cap ${formatNumber(d.remainingCapacity, 0)}; TVL ${formatUsd(d.marketTvlUsd, 0)}; capacity penalty ${d.capacityPenalty}; TVL penalty ${d.tvlPenalty}.`;
+    }
+    default:
+      return '';
+  }
+}
+
+function RiskDimensionBar({ name, score, risk }: { name: string; score: number; risk: RiskAssessmentData }) {
   const [showDesc, setShowDesc] = useState(false);
   return (
     <div>
@@ -93,9 +128,14 @@ function RiskDimensionBar({ name, score }: { name: string; score: number }) {
         <span className="text-vault-muted/50 w-6 text-right">{DIMENSION_WEIGHTS[name]}%</span>
       </div>
       {showDesc && DIMENSION_DESCRIPTIONS[name] && (
-        <p className="text-[10px] text-vault-muted/70 pl-1 mt-0.5 mb-1 leading-relaxed">
-          {DIMENSION_DESCRIPTIONS[name]}
-        </p>
+        <div className="pl-1 mt-0.5 mb-1 space-y-0.5">
+          <p className="text-[10px] text-vault-muted/70 leading-relaxed">
+            {DIMENSION_DESCRIPTIONS[name]}
+          </p>
+          <p className="text-[10px] text-vault-text/80 leading-relaxed">
+            {dimensionExplain(name, risk)}
+          </p>
+        </div>
       )}
     </div>
   );
@@ -116,15 +156,11 @@ function RiskDetailPanel({ risk, label }: { risk: RiskAssessmentData; label: str
 
       <div className="space-y-1.5 mb-3">
         {Object.entries(risk.dimensions).map(([key, value]) => (
-          <RiskDimensionBar key={key} name={key} score={value} />
+          <RiskDimensionBar key={key} name={key} score={value} risk={risk} />
         ))}
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs border-t border-vault-border/30 pt-2">
-        <div className="flex justify-between">
-          <span className="text-vault-muted">Penalty</span>
-          <span className="text-vault-text-bright font-mono">{(risk.riskPenalty * 100).toFixed(2)}%</span>
-        </div>
         <div className="flex justify-between">
           <span className="text-vault-muted">Health Target</span>
           <span className="text-vault-text-bright font-mono">{risk.targetHealthRate.toFixed(2)}</span>
@@ -137,10 +173,18 @@ function RiskDetailPanel({ risk, label }: { risk: RiskAssessmentData; label: str
           <span className="text-vault-muted">Alert</span>
           <span className={`font-semibold uppercase ${alertLevelColor(risk.alertLevel)}`}>{risk.alertLevel}</span>
         </div>
+        <div className="flex justify-between">
+          <span className="text-vault-muted">Reference</span>
+          <span className="text-vault-text-bright font-mono">{formatNumber(risk.details.depegRisk.expectedRate, 4)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-vault-muted">Deviation</span>
+          <span className="text-vault-text-bright font-mono">{formatBps(risk.details.depegRisk.deviationBps)}</span>
+        </div>
       </div>
 
       <div className="text-[10px] text-vault-muted/60 border-t border-vault-border/20 pt-2 mt-2 leading-relaxed">
-        <p>Composite = weighted sum of 4 dimensions (click each bar for details). Penalty reduces effective APY. Health Target and Max Position Cap are dynamically adjusted based on score.</p>
+        <p>Composite = weighted sum of 4 dimensions. Risk is a separate axis from displayed APY. Click each bar to inspect the exact inputs behind the score.</p>
       </div>
     </div>
   );
@@ -242,7 +286,7 @@ export function MultiplyCard() {
                   </thead>
                   <tbody>
                     {data.candidates
-                      .sort((a, b) => (b.movingAvg ?? b.adjustedApy) - (a.movingAvg ?? a.adjustedApy))
+                      .sort((a, b) => (b.movingAvg ?? b.effectiveApy) - (a.movingAvg ?? a.effectiveApy))
                       .map((c) => (
                       <tr
                         key={c.label}

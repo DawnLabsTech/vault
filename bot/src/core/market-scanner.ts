@@ -10,7 +10,7 @@ const log = createChildLogger('market-scanner');
 export interface ScanResult {
   label: string;
   effectiveApy: number;
-  /** Risk-adjusted APY (effectiveApy - riskPenalty) */
+  /** Legacy field retained for API compatibility; equals effectiveApy */
   adjustedApy: number;
   /** @deprecated Use riskAssessment.compositeScore instead */
   riskTier: number;
@@ -242,17 +242,13 @@ export class MarketScanner {
             return null;
           }),
         ]);
-        // Dynamic risk assessment (fallback to legacy riskTier/riskPenalty)
+        // Dynamic risk assessment used for separate risk gating and display.
         let riskAssessment: RiskAssessment | null = null;
-        let riskPenalty: number;
         if (this.riskScorer) {
           riskAssessment = await this.riskScorer.assessCandidate(candidate, this.maxPositionCapUsd);
-          riskPenalty = riskAssessment.riskPenalty;
           this.latestRiskAssessments.set(candidate.label, riskAssessment);
-        } else {
-          riskPenalty = (this.config.riskPenalty ?? [0, 0.005, 0.015])[(candidate.riskTier ?? 2) - 1] ?? 0;
         }
-        const adjustedApy = effectiveApy - riskPenalty;
+        const adjustedApy = effectiveApy;
 
         const result: ScanResult = {
           label: candidate.label,
@@ -301,7 +297,7 @@ export class MarketScanner {
         results: results.map((r) => ({
           label: r.label,
           apy: `${(r.effectiveApy * 100).toFixed(2)}%`,
-          adjusted: `${(r.adjustedApy * 100).toFixed(2)}%`,
+          displayedApy: `${(r.effectiveApy * 100).toFixed(2)}%`,
           remainingCapacity: r.capacity ? `${r.capacity.remaining.toFixed(0)}` : 'N/A',
           utilization: r.capacity ? `${(r.capacity.utilizationRatio * 100).toFixed(1)}%` : 'N/A',
         })),
@@ -313,7 +309,7 @@ export class MarketScanner {
   }
 
   /**
-   * Get 24h moving average adjusted APY for a candidate.
+   * Get 24h moving average raw APY for a candidate.
    */
   getMovingAvgApy(label: string): number | null {
     const records = this.apyHistory.get(label);
@@ -323,7 +319,7 @@ export class MarketScanner {
     const recent = records.filter((r) => r.timestamp > cutoff);
     if (recent.length === 0) return null;
 
-    return recent.reduce((sum, r) => sum + r.adjustedApy, 0) / recent.length;
+    return recent.reduce((sum, r) => sum + r.effectiveApy, 0) / recent.length;
   }
 
   /**
@@ -358,7 +354,7 @@ export class MarketScanner {
 
       // Skip candidates with risk score above reject threshold
       const ra = this.latestRiskAssessments.get(candidate.label);
-      if (ra && ra.compositeScore >= (this.riskScorer ? 90 : Infinity)) {
+      if (ra && this.riskScorer && ra.compositeScore >= this.getRejectThreshold()) {
         log.debug({ label: candidate.label, score: ra.compositeScore.toFixed(1) }, 'Skipping candidate — risk score above reject threshold');
         continue;
       }
@@ -441,5 +437,9 @@ export class MarketScanner {
   /** Get latest risk assessments */
   getRiskAssessments(): Map<string, RiskAssessment> {
     return this.latestRiskAssessments;
+  }
+
+  private getRejectThreshold(): number {
+    return this.riskScorer?.getRejectThreshold() ?? 90;
   }
 }

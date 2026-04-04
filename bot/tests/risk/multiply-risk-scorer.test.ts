@@ -108,29 +108,57 @@ describe('MultiplyRiskScorer Jupiter integration', () => {
       .mockRejectedValue(new Error('Jupiter price API 401'));
     const depegSpy = vi
       .spyOn(scorer as any, 'calcDepegRisk')
-      .mockResolvedValue(12);
+      .mockResolvedValue({ score: 12, details: { stub: true } });
     const liqSpy = vi
       .spyOn(scorer as any, 'calcLiquidationProximity')
-      .mockResolvedValue(34);
+      .mockResolvedValue({ score: 34, details: { stub: true } });
     const exitSpy = vi
       .spyOn(scorer as any, 'calcExitLiquidity')
-      .mockResolvedValue(56);
+      .mockResolvedValue({ score: 56, details: { stub: true } });
     const reserveSpy = vi
       .spyOn(scorer as any, 'calcReservePressure')
-      .mockResolvedValue(78);
+      .mockResolvedValue({ score: 78, details: { stub: true } });
 
-    const dimensions = await (scorer as any).computeDimensions(candidate, 10_000);
+    const result = await (scorer as any).computeDimensions(candidate, 10_000);
 
     expect(fetchPricesSpy).toHaveBeenCalledWith(candidate.collToken, candidate.debtToken);
     expect(depegSpy).toHaveBeenCalledWith(candidate, { collPrice: 0, debtPrice: 0 });
     expect(liqSpy).toHaveBeenCalledWith(candidate, { collPrice: 0, debtPrice: 0 });
     expect(exitSpy).toHaveBeenCalledWith(candidate, 10_000);
     expect(reserveSpy).toHaveBeenCalledWith(candidate);
-    expect(dimensions).toEqual({
+    expect(result.dimensions).toEqual({
       depegRisk: 12,
       liquidationProximity: 34,
       exitLiquidity: 56,
       reservePressure: 78,
     });
+  });
+
+  it('uses a reference rate instead of 1.0 when computing ONyc depeg risk', async () => {
+    const scorer = createScorer();
+    vi.spyOn(scorer as any, 'getReferencePriceUsd')
+      .mockResolvedValueOnce(1.08)
+      .mockResolvedValueOnce(1.0);
+    vi.spyOn(scorer as any, 'getPegVolatility24h').mockReturnValue({
+      bps: 12,
+      score: 24,
+      sampleCount: 8,
+    });
+    vi.spyOn(scorer as any, 'getPegTailRisk7d').mockReturnValue({
+      bps: 21,
+      score: 10.5,
+      sampleCount: 20,
+    });
+    vi.spyOn(scorer as any, 'storePegDeviation').mockImplementation(() => {});
+
+    const result = await (scorer as any).calcDepegRisk(candidate, {
+      collPrice: 1.0896,
+      debtPrice: 1.0001,
+    });
+
+    expect(result.details.expectedRate).toBe(1.08);
+    expect(result.details.deviationBps).toBeLessThan(100);
+    expect(result.details.deviationBps).toBeGreaterThan(80);
+    expect(result.score).toBeGreaterThan(0);
   });
 });

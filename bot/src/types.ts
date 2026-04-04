@@ -214,12 +214,68 @@ export interface RiskDimensionScores {
   reservePressure: number;
 }
 
+export interface DepegRiskDetails {
+  collPriceUsd: number;
+  debtPriceUsd: number;
+  marketRate: number;
+  expectedRate: number;
+  deviationBps: number;
+  spotScore: number;
+  volatility24hBps: number;
+  volatility24hScore: number;
+  volatilitySampleCount: number;
+  tailRisk7dBps: number;
+  tailRisk7dScore: number;
+  tailRiskSampleCount: number;
+}
+
+export interface LiquidationProximityDetails {
+  liquidationLtv: number;
+  targetHealthRate: number;
+  targetLeverage: number;
+  marketRate: number;
+  simulatedHealthRate: number;
+  stressedMarketRate: number;
+  stressedHealthRate: number;
+  baseScore: number;
+  stressScore: number;
+}
+
+export interface ExitLiquidityDetails {
+  assumedExitUsd: number;
+  quoteInputAmount: number;
+  priceImpactPct: number;
+  slippageBps: number;
+}
+
+export interface ReservePressureDetails {
+  collateralUtilizationRatio: number;
+  debtUtilizationRatio: number;
+  weightedUtilizationRatio: number;
+  utilizationScore: number;
+  depositLimit: number;
+  totalSupply: number;
+  remainingCapacity: number;
+  capacityRatio: number;
+  capacityPenalty: number;
+  marketTvlUsd: number;
+  tvlPenalty: number;
+}
+
+export interface RiskDimensionDetails {
+  depegRisk: DepegRiskDetails;
+  liquidationProximity: LiquidationProximityDetails;
+  exitLiquidity: ExitLiquidityDetails;
+  reservePressure: ReservePressureDetails;
+}
+
 export type RiskAlertLevel = 'normal' | 'warning' | 'critical' | 'emergency';
 
 export interface RiskAssessment {
   label: string;
   compositeScore: number; // 0-100
   dimensions: RiskDimensionScores;
+  details: RiskDimensionDetails;
   /** Derived APY penalty (decimal, e.g. 0.005 = 0.5%) */
   riskPenalty: number;
   /** Derived target health rate */
