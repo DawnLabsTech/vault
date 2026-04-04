@@ -126,6 +126,7 @@ class ConfigManager extends EventEmitter {
       kaminoMultiply: overrides.kaminoMultiply ?? defaults.kaminoMultiply,
       kaminoMultiplyCandidates: overrides.kaminoMultiplyCandidates ?? defaults.kaminoMultiplyCandidates,
       multiplyRebalance: { ...defaults.multiplyRebalance!, ...overrides.multiplyRebalance },
+      riskScorer: overrides.riskScorer ?? defaults.riskScorer,
     };
   }
 
