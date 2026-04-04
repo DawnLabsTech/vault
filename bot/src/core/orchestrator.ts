@@ -13,11 +13,14 @@ import { calculateDailyPnl, saveDailyPnl } from '../measurement/pnl.js';
 import { getStateJson, setStateJson } from '../measurement/state-store.js';
 import { getPrices } from '../connectors/prices.js';
 import { sendAlert } from '../utils/notify.js';
+import { getTxFeeInSol } from '../utils/tx-fee.js';
 import { SolanaRpc } from '../connectors/solana/rpc.js';
 import { BotState, EventType, ActionType, type PerpExchange, type PortfolioSnapshot, type Action, type FundingRateData } from '../types.js';
 import type { BinanceRestClient } from '../connectors/binance/rest.js';
 import type { BinanceWsClient } from '../connectors/binance/ws.js';
-import type { DriftPerp } from '../connectors/drift/perp.js';
+import type { KaminoLoopLending } from '../connectors/defi/kamino-loop.js';
+import type { KaminoMultiplyLending } from '../connectors/defi/kamino-multiply.js';
+import type { MarketScanner } from './market-scanner.js';
 
 const log = createChildLogger('orchestrator');
 
@@ -26,7 +29,6 @@ const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 export interface OrchestratorDeps {
   binanceRest: BinanceRestClient | null;
   binanceWs: BinanceWsClient | null;
-  driftPerp: DriftPerp | null;
   frMonitor: FrMonitor;
   baseAllocator: BaseAllocator;
   dnExecutor: DnExecutor;
@@ -34,6 +36,9 @@ export interface OrchestratorDeps {
   solanaRpc: SolanaRpc;
   walletAddress: string;
   perpExchange?: PerpExchange;
+  kaminoLoop?: KaminoLoopLending | null;
+  kaminoMultiplyAdapters?: KaminoMultiplyLending[];
+  marketScanner?: MarketScanner | null;
 }
 
 interface PersistedState {
@@ -126,6 +131,33 @@ export class Orchestrator {
     this.scheduler.register('health-check', 5_000, async () => {
       await this.healthCheck();
     });
+
+    // Kamino Loop health monitoring — every 5 minutes
+    if (this.deps.kaminoLoop) {
+      this.scheduler.register('kamino-loop-health', 300_000, async () => {
+        await this.checkKaminoLoopHealth();
+      });
+    }
+
+    // Multiply market scanner — periodic scan + switch evaluation
+    if (this.deps.marketScanner) {
+      const scanInterval = config.multiplyRebalance?.scanIntervalMs ?? 21_600_000;
+      this.scheduler.register('multiply-market-scan', scanInterval, async () => {
+        await this.scanAndSwitchMultiplyMarket();
+      });
+    }
+
+    // Kamino Multiply health monitoring — every 5 minutes
+    if (this.deps.kaminoMultiplyAdapters && this.deps.kaminoMultiplyAdapters.length > 0) {
+      this.scheduler.register('kamino-multiply-health', 300_000, async () => {
+        await this.checkKaminoMultiplyHealth();
+      });
+
+      // Reward claiming — every 24 hours
+      this.scheduler.register('kamino-multiply-rewards', 86_400_000, async () => {
+        await this.claimKaminoMultiplyRewards();
+      });
+    }
   }
 
   private setupConfigReload(): void {
@@ -186,13 +218,6 @@ export class Orchestrator {
       this.dailyPnlTimer = null;
     }
     this.deps.binanceWs?.disconnect();
-    if (this.deps.driftPerp) {
-      try {
-        await this.deps.driftPerp.cleanup();
-      } catch (err) {
-        log.warn({ error: (err as Error).message }, 'Failed to cleanup Drift perp client');
-      }
-    }
     this.persistState();
     await sendAlert('Vault Bot stopped', 'info');
     log.info('Orchestrator stopped');
@@ -201,19 +226,6 @@ export class Orchestrator {
   private async fetchFundingRate(): Promise<void> {
     try {
       const config = getConfig();
-
-      if (this.deps.perpExchange === 'drift' && this.deps.driftPerp) {
-        // Drift mode: fetch FR via Drift REST API
-        const fr = await this.deps.driftPerp.getFundingRate();
-        if (fr !== 0) {
-          this.deps.frMonitor.recordFundingRate({
-            symbol: 'SOL-PERP',
-            fundingRate: fr,
-            fundingTime: Date.now(),
-          });
-        }
-        return;
-      }
 
       if (!this.deps.binanceRest) {
         log.debug('Skipping FR fetch — no perp connector available');
@@ -424,18 +436,7 @@ export class Orchestrator {
     let binancePerpUnrealizedPnl = 0;
     let binancePerpSize = 0;
 
-    if (this.deps.perpExchange === 'drift' && this.deps.driftPerp) {
-      try {
-        binanceUsdcBalance = await this.deps.driftPerp.getUsdcBalance();
-        if (this.botState === BotState.BASE_DN) {
-          const pos = await this.deps.driftPerp.getPosition();
-          binancePerpUnrealizedPnl = pos.unrealizedPnl;
-          binancePerpSize = pos.size;
-        }
-      } catch (err) {
-        log.warn({ error: (err as Error).message }, 'Failed to get Drift data for snapshot');
-      }
-    } else if (this.deps.binanceRest) {
+    if (this.deps.binanceRest) {
       try {
         const balances = await this.deps.binanceRest.getBalance();
         const usdcBal = balances.find((b: any) => b.asset === 'USDC' || b.asset === 'USDT');
@@ -550,6 +551,294 @@ export class Orchestrator {
       }
     } catch (err) {
       log.error({ error: (err as Error).message }, 'Health check error');
+    }
+  }
+
+  /**
+   * Monitor Kamino Loop health rate.
+   * - Below alertHealthRate (1.10): send warning alert
+   * - Below emergencyHealthRate (1.05): auto-deleverage
+   */
+  private async checkKaminoLoopHealth(): Promise<void> {
+    const kaminoLoop = this.deps.kaminoLoop;
+    if (!kaminoLoop) return;
+
+    try {
+      const health = await kaminoLoop.getHealthRate();
+      if (health === Infinity) return; // no borrows, nothing to monitor
+
+      const loopConfig = kaminoLoop.getLoopConfig();
+
+      log.debug({ healthRate: health }, 'Kamino Loop health check');
+
+      if (health < loopConfig.emergencyHealthRate) {
+        // CRITICAL: auto-deleverage
+        log.error({ health, threshold: loopConfig.emergencyHealthRate }, 'Kamino Loop health CRITICAL — emergency deleverage');
+        await sendAlert(
+          `Kamino Loop health CRITICAL: ${health.toFixed(3)} (threshold: ${loopConfig.emergencyHealthRate})\nTriggering emergency deleverage`,
+          'critical',
+        );
+
+        const config = getConfig();
+        if (!config.general.dryRun) {
+          const txSigs = await kaminoLoop.emergencyDeleverage();
+          for (const txSig of txSigs) {
+            recordEvent({
+              timestamp: new Date().toISOString(),
+              eventType: EventType.ALERT,
+              amount: 0,
+              asset: 'USDC',
+              txHash: txSig,
+              sourceProtocol: 'kamino-loop',
+              metadata: {
+                action: 'emergency_deleverage',
+                healthRate: health,
+              },
+            });
+          }
+          await sendAlert(
+            `Emergency deleverage complete — ${txSigs.length} transactions`,
+            'critical',
+          );
+        } else {
+          log.info('DRY RUN: Would trigger emergency deleverage');
+        }
+      } else if (health < loopConfig.alertHealthRate) {
+        // WARNING: approaching danger zone
+        log.warn({ health, threshold: loopConfig.alertHealthRate }, 'Kamino Loop health WARNING');
+        await sendAlert(
+          `Kamino Loop health WARNING: ${health.toFixed(3)} (alert threshold: ${loopConfig.alertHealthRate})`,
+          'warning',
+        );
+      }
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'Kamino Loop health check failed');
+    }
+  }
+
+  /**
+   * Monitor all Kamino Multiply positions' health rates.
+   */
+  private async checkKaminoMultiplyHealth(): Promise<void> {
+    const adapters = this.deps.kaminoMultiplyAdapters;
+    if (!adapters || adapters.length === 0) return;
+
+    for (const adapter of adapters) {
+      try {
+        const health = await adapter.getHealthRate();
+        if (health === Infinity) continue;
+
+        const cfg = adapter.getMultiplyConfig();
+        const label = cfg.label;
+
+        log.debug({ label, healthRate: health }, 'Kamino Multiply health check');
+
+        if (health < cfg.emergencyHealthRate) {
+          log.error({ label, health, threshold: cfg.emergencyHealthRate }, 'Kamino Multiply health CRITICAL');
+          await sendAlert(
+            `Kamino Multiply [${label}] health CRITICAL: ${health.toFixed(3)}\nTriggering emergency deleverage`,
+            'critical',
+          );
+
+          const config = getConfig();
+          if (!config.general.dryRun) {
+            const txSigs = await adapter.emergencyDeleverage();
+            for (const txSig of txSigs) {
+              recordEvent({
+                timestamp: new Date().toISOString(),
+                eventType: EventType.ALERT,
+                amount: 0,
+                asset: 'USD',
+                txHash: txSig,
+                sourceProtocol: adapter.name,
+                metadata: { action: 'emergency_deleverage', healthRate: health },
+              });
+            }
+            await sendAlert(`[${label}] Emergency deleverage complete`, 'critical');
+          } else {
+            log.info({ label }, 'DRY RUN: Would trigger emergency deleverage');
+          }
+        } else if (health < cfg.alertHealthRate) {
+          log.warn({ label, health, threshold: cfg.alertHealthRate }, 'Kamino Multiply health WARNING');
+          await sendAlert(
+            `Kamino Multiply [${label}] health WARNING: ${health.toFixed(3)} (alert: ${cfg.alertHealthRate})`,
+            'warning',
+          );
+        }
+      } catch (err) {
+        log.error({ error: (err as Error).message, adapter: adapter.name }, 'Kamino Multiply health check failed');
+      }
+    }
+  }
+
+  /**
+   * Claim pending rewards for all Kamino Multiply positions.
+   */
+  private async claimKaminoMultiplyRewards(): Promise<void> {
+    const adapters = this.deps.kaminoMultiplyAdapters;
+    if (!adapters || adapters.length === 0) return;
+
+    const config = getConfig();
+    if (config.general.dryRun) {
+      log.info('DRY RUN: Would claim Kamino Multiply rewards');
+      return;
+    }
+
+    for (const adapter of adapters) {
+      try {
+        const results = await adapter.claimRewards();
+        if (results.length > 0) {
+          log.info({ adapter: adapter.name, claims: results.length }, 'Multiply rewards claimed');
+          for (const r of results) {
+            recordEvent({
+              timestamp: new Date().toISOString(),
+              eventType: EventType.LENDING_INTEREST,
+              amount: r.amount,
+              asset: r.mint,
+              txHash: r.txSig,
+              sourceProtocol: adapter.name,
+              metadata: { action: 'reward_claim' },
+            });
+          }
+        }
+      } catch (err) {
+        log.error({ error: (err as Error).message, adapter: adapter.name }, 'Multiply reward claim failed');
+      }
+    }
+  }
+
+  /**
+   * Scan all Multiply candidate markets and switch if a better market is found.
+   */
+  private async scanAndSwitchMultiplyMarket(): Promise<void> {
+    const scanner = this.deps.marketScanner;
+    if (!scanner) return;
+
+    try {
+      // Step 1: Scan all candidates
+      await scanner.scanAll();
+
+      // Step 2: Find current active multiply adapter
+      const adapters = this.deps.kaminoMultiplyAdapters;
+      if (!adapters || adapters.length === 0) {
+        log.debug('No active Multiply adapters, skipping switch evaluation');
+        return;
+      }
+
+      // We manage one primary multiply position for rebalancing
+      const currentAdapter = adapters[0]!;
+      const currentLabel = currentAdapter.getMultiplyConfig().label;
+
+      // Get current balance to filter candidates by capacity
+      const currentBalance = await currentAdapter.getBalance();
+
+      // Step 3: Get recommendation (pass deployable amount for capacity filtering)
+      const recommendation = scanner.getRecommendation(currentLabel, currentBalance);
+      if (!recommendation) {
+        log.debug({ currentLabel }, 'No market switch recommended');
+        return;
+      }
+
+      log.info(
+        {
+          from: recommendation.from,
+          to: recommendation.to,
+          diffBps: recommendation.diffBps,
+          fromApy: `${(recommendation.fromApy * 100).toFixed(2)}%`,
+          toApy: `${(recommendation.toApy * 100).toFixed(2)}%`,
+        },
+        'Multiply market switch triggered',
+      );
+
+      await sendAlert(
+        `Multiply market switch: ${recommendation.from} → ${recommendation.to}\n` +
+        `APY: ${(recommendation.fromApy * 100).toFixed(2)}% → ${(recommendation.toApy * 100).toFixed(2)}% (+${recommendation.diffBps}bps)`,
+        'warning',
+      );
+
+      const config = getConfig();
+      if (config.general.dryRun) {
+        log.info('DRY RUN: Would switch multiply market');
+        return;
+      }
+
+      // Step 4: Withdraw from current position (reuse balance from above)
+      if (currentBalance < 0.01) {
+        log.info('Current position balance is negligible, skipping withdraw');
+      } else {
+        log.info({ balance: currentBalance, from: currentLabel }, 'Withdrawing from current market');
+        const withdrawSig = await currentAdapter.withdraw(currentBalance);
+        const rpcUrl = process.env.HELIUS_RPC_URL ?? '';
+        const withdrawFee = rpcUrl ? await getTxFeeInSol(rpcUrl, withdrawSig) : 0;
+
+        recordEvent({
+          timestamp: new Date().toISOString(),
+          eventType: EventType.REBALANCE,
+          amount: currentBalance,
+          asset: 'USD',
+          txHash: withdrawSig,
+          fee: withdrawFee,
+          feeAsset: 'SOL',
+          sourceProtocol: currentAdapter.name,
+          metadata: {
+            action: 'multiply_market_switch_withdraw',
+            from: currentLabel,
+            to: recommendation.to,
+          },
+        });
+      }
+
+      // Step 5: Create new adapter and deposit
+      const newAdapter = scanner.createFullAdapter(recommendation.candidate);
+      const depositAmount = currentBalance > 0.01 ? currentBalance : 0;
+
+      if (depositAmount > 0.01) {
+        log.info({ amount: depositAmount, to: recommendation.to }, 'Depositing to new market');
+        const depositSig = await newAdapter.deposit(depositAmount);
+        const depositFee = rpcUrl ? await getTxFeeInSol(rpcUrl, depositSig) : 0;
+
+        recordEvent({
+          timestamp: new Date().toISOString(),
+          eventType: EventType.REBALANCE,
+          amount: depositAmount,
+          asset: 'USD',
+          txHash: depositSig,
+          fee: depositFee,
+          feeAsset: 'SOL',
+          sourceProtocol: newAdapter.name,
+          metadata: {
+            action: 'multiply_market_switch_deposit',
+            from: currentLabel,
+            to: recommendation.to,
+          },
+        });
+      }
+
+      // Step 6: Hot-swap adapter references
+      const oldName = currentAdapter.name;
+      adapters[0] = newAdapter;
+
+      // Update base allocator
+      this.deps.baseAllocator.replaceProtocol(oldName, newAdapter);
+
+      // Record switch for holding period tracking
+      scanner.recordSwitch();
+
+      const newHealth = depositAmount > 0.01 ? await newAdapter.getHealthRate() : Infinity;
+
+      log.info(
+        { from: currentLabel, to: recommendation.to, depositAmount, newHealth },
+        'Multiply market switch complete',
+      );
+
+      await sendAlert(
+        `Market switch complete: ${currentLabel} → ${recommendation.to}\n` +
+        `Deployed: $${depositAmount.toFixed(2)} | Health: ${newHealth === Infinity ? 'N/A' : newHealth.toFixed(3)}`,
+        'info',
+      );
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'Multiply market scan/switch failed');
+      await sendAlert(`Multiply market scan failed: ${(err as Error).message}`, 'warning');
     }
   }
 
