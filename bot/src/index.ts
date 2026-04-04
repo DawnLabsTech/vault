@@ -22,6 +22,7 @@ import { JupiterSwap } from './connectors/defi/jupiter-swap.js';
 import { SolanaTransactionSender } from './connectors/solana/tx-sender.js';
 import { buildDnConnectors } from './connectors/dn-connectors.js';
 import { MarketScanner } from './core/market-scanner.js';
+import { MultiplyRiskScorer } from './risk/multiply-risk-scorer.js';
 import type { LendingProtocol } from './types.js';
 
 const log = createChildLogger('main');
@@ -197,6 +198,13 @@ async function main(): Promise<void> {
         defaultAlertHealthRate: 1.10,
         defaultEmergencyHealthRate: 1.05,
       };
+      // Initialize risk scorer if config is present
+      let riskScorer: MultiplyRiskScorer | null = null;
+      if (config.riskScorer) {
+        riskScorer = new MultiplyRiskScorer(rpcUrl, config.riskScorer, db);
+        log.info('Multiply risk scorer initialized');
+      }
+
       marketScanner = new MarketScanner(
         multiplyCandidates,
         rebalanceConfig,
@@ -204,8 +212,10 @@ async function main(): Promise<void> {
         walletAddress,
         wallet.secretKey,
         db,
+        riskScorer,
+        config.risk.maxPositionCapUsd,
       );
-      log.info({ candidates: multiplyCandidates.length }, 'Market scanner initialized');
+      log.info({ candidates: multiplyCandidates.length, riskScorer: !!riskScorer }, 'Market scanner initialized');
     } catch (err) {
       log.warn({ error: (err as Error).message }, 'Market scanner initialization failed');
     }
