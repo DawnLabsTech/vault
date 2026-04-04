@@ -24,6 +24,7 @@ export function FrChart() {
     exit: ISeriesApi<'Line'>;
     emergency: ISeriesApi<'Line'>;
   } | null>(null);
+  const visibleRangeRef = useRef<{ from: number; to: number } | null>(null);
 
   // Initialize chart once
   useEffect(() => {
@@ -74,6 +75,17 @@ export function FrChart() {
     const observer = new ResizeObserver(() => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth });
+        requestAnimationFrame(() => {
+          const range = visibleRangeRef.current;
+          if (range) {
+            chart.timeScale().setVisibleRange({
+              from: range.from as any,
+              to: range.to as any,
+            });
+          } else {
+            chart.timeScale().fitContent();
+          }
+        });
       }
     });
     observer.observe(containerRef.current);
@@ -104,19 +116,29 @@ export function FrChart() {
       const times = sorted.map((d) => Math.floor(d.fundingTime / 1000));
       const minTime = Math.min(...times);
       const maxTime = Math.max(...times);
+      visibleRangeRef.current = { from: minTime, to: maxTime };
       const pts = [{ time: minTime as any, value: 0 }, { time: maxTime as any, value: 0 }];
       seriesRef.current.entry.setData(pts.map((p) => ({ ...p, value: FR_ENTRY_THRESHOLD })));
       seriesRef.current.exit.setData(pts.map((p) => ({ ...p, value: FR_EXIT_THRESHOLD })));
       seriesRef.current.emergency.setData(pts.map((p) => ({ ...p, value: FR_EMERGENCY_THRESHOLD })));
     } else {
       seriesRef.current.binanceFr.setData([]);
+      visibleRangeRef.current = null;
     }
 
-    chartRef.current?.timeScale().fitContent();
+    const range = visibleRangeRef.current;
+    if (range) {
+      chartRef.current?.timeScale().setVisibleRange({
+        from: range.from as any,
+        to: range.to as any,
+      });
+    } else {
+      chartRef.current?.timeScale().fitContent();
+    }
   }, [binanceData]);
 
   return (
-    <div className="bg-vault-card border border-vault-border rounded-lg p-4">
+    <div className="bg-vault-card border border-vault-border rounded-lg p-4 h-full">
       <div className="flex items-start justify-between mb-3">
         <div className="flex flex-col gap-1.5">
           <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider">

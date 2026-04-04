@@ -1,0 +1,196 @@
+- generic [active] [ref=e1]:
+  - button "Skip to main content" [ref=e2] [cursor=pointer]
+  - generic [ref=e3]:
+    - region "Notifications (F8)":
+      - list
+    - region "Notifications alt+T"
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - text: PRIME EVM IS COMING!
+        - link "Be the first to know when Hastra goes live on Ethereum" [ref=e6] [cursor=pointer]:
+          - /url: /evm
+      - navigation [ref=e7]:
+        - generic [ref=e8]:
+          - link "Hastra":
+            - /url: /
+            - img "Hastra"
+          - tablist [ref=e10]:
+            - button "submenu trigger" [ref=e12] [cursor=pointer]: About
+            - button "submenu trigger" [ref=e14] [cursor=pointer]: Product
+            - tab "Earn" [ref=e15] [cursor=pointer]:
+              - link "Earn" [ref=e16]:
+                - /url: /earn
+            - button "submenu trigger" [ref=e18] [cursor=pointer]: Learn
+        - link "Launch Protocol" [ref=e19] [cursor=pointer]:
+          - /url: /earn
+          - button "Launch Protocol" [ref=e20]
+      - main [ref=e21]:
+        - generic [ref=e22]:
+          - region "Landing Page Hero" [ref=e23]:
+            - generic [ref=e26]:
+              - paragraph [ref=e27]: "Now Live: Earn Up to ... APY with PRIME"
+              - generic [ref=e28]:
+                - paragraph [ref=e29]: Stack
+                - paragraph [ref=e30]: Real Assets
+                - paragraph [ref=e31]: On-Chain
+              - paragraph [ref=e32]:
+                - text: Elite DeFi Products for the Crypto Savvy,
+                - text: Backed by Real-World Assets.
+              - link "Get PRIME" [ref=e34] [cursor=pointer]:
+                - /url: /earn
+                - button "Get PRIME" [ref=e35]:
+                  - text: Get PRIME
+                  - img
+          - region "Grow your wealth not your workload" [ref=e36]:
+            - generic:
+              - img "left image"
+              - img "right image"
+            - generic [ref=e37]:
+              - paragraph [ref=e38]:
+                - text: Now available on
+                - img "Solana"
+              - heading "Grow your wealth, not your workload." [level=2] [ref=e39]:
+                - text: Grow your wealth,
+                - text: not your workload.
+              - paragraph [ref=e40]:
+                - text: Explore new ways our tokens
+                - text: can earn APY for you.
+          - region "wYLDS card" [ref=e41]:
+            - generic [ref=e42]:
+              - heading "wYLDS wYLDS Live on Solana Liquid Yield. No staking. Just Earning" [level=3] [ref=e44]:
+                - generic [ref=e45]:
+                  - img "wYLDS" [ref=e46]
+                  - generic [ref=e47]:
+                    - heading "wYLDS" [level=3] [ref=e48]
+                    - paragraph [ref=e49]: Live on Solana
+                - paragraph [ref=e50]: Liquid Yield. No staking. Just Earning
+              - generic [ref=e51]:
+                - generic [ref=e52]:
+                  - paragraph [ref=e53]: TradFi Yields meets DeFi Velocity. Earn Loading... APY on-the-go and trade and send whenever you want - all backed by real world assets.
+                  - paragraph [ref=e54]:
+                    - text: "Innovation:"
+                    - text: Instant transfers, minimal fees, full DeFi composability - all backed by real world assets
+                - generic [ref=e55]:
+                  - generic [ref=e56]:
+                    - paragraph [ref=e57]: Loading...
+                    - paragraph [ref=e58]: Current APY
+                  - generic [ref=e59]:
+                    - paragraph [ref=e60]: Loading...
+                    - paragraph [ref=e61]: Total Circulating Supply
+                  - generic [ref=e62]:
+                    - paragraph [ref=e63]: Loading...
+                    - paragraph [ref=e64]: Active Wallets
+          - region "PRIME card" [ref=e65]:
+            - generic [ref=e66]:
+              - heading "prime PRIME Live on Solana Liquid Staking to earn against Figure HELOCs" [level=3] [ref=e68]:
+                - generic [ref=e69]:
+                  - img "prime" [ref=e70]
+                  - generic [ref=e71]:
+                    - heading "PRIME" [level=3] [ref=e72]
+                    - paragraph [ref=e73]: Live on Solana
+                - paragraph [ref=e74]: Liquid Staking to earn against Figure HELOCs
+              - generic [ref=e75]:
+                - generic [ref=e76]:
+                  - paragraph [ref=e77]: Earn more, on your terms. Stake wYLDS to unlock ... APY backed by Figure Home Equity Lines of Credit.
+                  - paragraph [ref=e78]:
+                    - text: "Innovation:"
+                    - text: Democratizing access to institutional-grade lending pools traditionally exclusive to prime brokerages.
+                - generic [ref=e79]:
+                  - generic [ref=e80]:
+                    - paragraph [ref=e81]: ...
+                    - paragraph [ref=e82]: Current APY
+                  - generic [ref=e83]:
+                    - paragraph [ref=e84]: ...
+                    - paragraph [ref=e85]: Total Circulating Supply
+                  - generic [ref=e86]:
+                    - paragraph [ref=e87]: ...
+                    - paragraph [ref=e88]: Active Wallets
+          - region "Steps to get PRIME" [ref=e89]:
+            - heading "Steps to get to PRIME" [level=2] [ref=e90]:
+              - text: Steps to get
+              - text: to PRIME
+            - generic [ref=e91]:
+              - generic [ref=e92]:
+                - generic [ref=e93]:
+                  - img "swap" [ref=e94]
+                  - paragraph [ref=e95]:
+                    - text: Swap and
+                    - text: get wYLDS
+                - paragraph [ref=e96]: Deep market research and technical analysis drives every product decision.
+              - generic [ref=e97]:
+                - generic [ref=e98]:
+                  - img "stake" [ref=e99]
+                  - paragraph [ref=e100]:
+                    - text: Stake wYLDS =
+                    - text: get PRIME
+                - paragraph [ref=e101]: Building compliant solutions that work within existing financial frameworks.
+              - generic [ref=e102]:
+                - generic [ref=e103]:
+                  - img "kamino" [ref=e104]
+                  - paragraph [ref=e105]:
+                    - text: Loop with key partner
+                    - text: Kamino
+                - paragraph [ref=e106]: Creating interoperable solutions that enhance the entire financial ecosystem.
+          - region "Developed By Figure" [ref=e107]
+      - contentinfo [ref=e111]:
+        - generic [ref=e112]:
+          - generic [ref=e113]:
+            - generic [ref=e114]:
+              - img
+              - generic [ref=e115]:
+                - paragraph [ref=e116]: Stay Updated
+                - generic [ref=e118]:
+                  - textbox "Enter your email address" [ref=e119]
+                  - button [ref=e121] [cursor=pointer]:
+                    - img
+                - generic [ref=e122]:
+                  - checkbox [ref=e123] [cursor=pointer]
+                  - paragraph [ref=e124]:
+                    - text: I consent to receiving email communications from Hastra. By submitting this form, you agree to our
+                    - link "terms of use" [ref=e125] [cursor=pointer]:
+                      - /url: /terms
+                    - text: and
+                    - link "privacy policy" [ref=e126] [cursor=pointer]:
+                      - /url: /privacy
+            - generic "footer navigation" [ref=e127]:
+              - list [ref=e128]:
+                - paragraph [ref=e129]: Company
+                - listitem [ref=e130]:
+                  - link "About" [ref=e131] [cursor=pointer]:
+                    - /url: /about
+                - listitem [ref=e132]:
+                  - link "Earn" [ref=e133] [cursor=pointer]:
+                    - /url: /earn
+                - listitem [ref=e134]:
+                  - link "Learn" [ref=e135] [cursor=pointer]:
+                    - /url: https://help.hastra.io/
+              - list [ref=e136]:
+                - paragraph [ref=e137]: Products
+                - listitem [ref=e138]:
+                  - link "wYLDS" [ref=e139] [cursor=pointer]:
+                    - /url: /wylds
+                - listitem [ref=e140]:
+                  - link "PRIME" [ref=e141] [cursor=pointer]:
+                    - /url: /prime
+                - listitem [ref=e142]:
+                  - link "Reserves" [ref=e143] [cursor=pointer]:
+                    - /url: /proof-of-reserves
+              - list [ref=e144]:
+                - paragraph [ref=e145]: Legal
+                - listitem [ref=e146]:
+                  - link "Terms" [ref=e147] [cursor=pointer]:
+                    - /url: /terms
+                - listitem [ref=e148]:
+                  - link "Privacy" [ref=e149] [cursor=pointer]:
+                    - /url: /privacy
+                - listitem [ref=e150]:
+                  - link "Brand Assets" [ref=e151] [cursor=pointer]:
+                    - /url: /brand-assets
+          - generic "social links" [ref=e152]:
+            - link [ref=e153] [cursor=pointer]:
+              - /url: https://discord.gg/provenance
+              - img [ref=e154]
+            - link [ref=e155] [cursor=pointer]:
+              - /url: https://x.com/HastraFi
+              - img [ref=e156]
+          - paragraph [ref=e158]: Signum Ltd. Copyright© 2026

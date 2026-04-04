@@ -1,9 +1,11 @@
 'use client';
 
 import { Header } from '@/components/layout/Header';
+import { SectionHeader } from '@/components/layout/SectionHeader';
 import { BotStatusCard } from '@/components/cards/BotStatusCard';
 import { PortfolioCard } from '@/components/cards/PortfolioCard';
 import { PerformanceCard } from '@/components/cards/PerformanceCard';
+import { AlphaPositionsCard } from '@/components/cards/AlphaPositionsCard';
 import { LendingCard } from '@/components/cards/LendingCard';
 import { MultiplyCard } from '@/components/cards/MultiplyCard';
 import { PnlChart } from '@/components/charts/PnlChart';
@@ -24,31 +26,48 @@ export default function Dashboard() {
         <PerformanceCard />
       </div>
 
-      {/* PnL Chart (full width) */}
-      <div className="mb-4">
-        <PnlChart />
-      </div>
-
-      {/* FR Chart + Allocation */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-4">
-        <div className="lg:col-span-3">
+      {/* Signals + Allocation */}
+      <section className="mb-4">
+        <SectionHeader
+          title="Signals & Allocation"
+          description="Funding gate and live split between the base sleeve and alpha sleeve"
+        />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <FrChart />
-        </div>
-        <div className="lg:col-span-2">
           <AllocationChart />
         </div>
-      </div>
+      </section>
 
-      {/* Lending & Multiply */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-        <MultiplyCard />
-        <LendingCard />
-      </div>
+      {/* PnL Overview */}
+      <section className="mb-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <PnlChart />
+          <PnlTable />
+        </div>
+      </section>
 
-      {/* PnL Table */}
-      <div className="mb-4">
-        <PnlTable />
-      </div>
+      {/* Base Layer */}
+      <section className="mb-5">
+        <SectionHeader
+          title="Base Layer"
+          description="Multiply is primary; lending absorbs overflow, diversification, and idle deployable cash"
+        />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <MultiplyCard />
+          <LendingCard />
+        </div>
+      </section>
+
+      {/* Alpha Layer */}
+      <section className="mb-5">
+        <SectionHeader
+          title="Alpha Layer"
+          description="Opportunistic DN overlay that stays parked until funding conditions improve"
+        />
+        <div className="grid grid-cols-1 gap-4">
+          <AlphaPositionsCard />
+        </div>
+      </section>
 
       {/* Events */}
       <div className="mb-4">

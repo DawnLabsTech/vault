@@ -1,0 +1,262 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - heading "Dawn Vault Dashboard" [level=1] [ref=e5]
+      - generic [ref=e6]:
+        - generic [ref=e7]: LIVE
+        - generic [ref=e9]: 21s
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - heading "Bot Status" [level=3] [ref=e12]
+        - generic [ref=e127]:
+          - generic [ref=e128]:
+            - generic [ref=e129]: State
+            - generic [ref=e130]: BASE_ONLY
+          - generic [ref=e131]:
+            - generic [ref=e132]: Uptime
+            - generic [ref=e133]: 0h
+          - generic [ref=e134]:
+            - generic [ref=e135]: Started
+            - generic [ref=e136]: Apr 4, 23:43
+      - generic [ref=e18]:
+        - heading "Portfolio" [level=3] [ref=e19]
+        - generic [ref=e137]:
+          - generic [ref=e138]:
+            - generic [ref=e139]: Total NAV
+            - generic [ref=e140]: $50.08
+          - generic [ref=e141]:
+            - generic [ref=e142]: Lending
+            - generic [ref=e143]: $0.00
+          - generic [ref=e144]:
+            - generic [ref=e145]: Multiply
+            - generic [ref=e146]: $50.08
+          - generic [ref=e148]:
+            - generic [ref=e149]: ONyc/USDC
+            - generic [ref=e150]: $50.08
+          - generic [ref=e151]:
+            - generic [ref=e152]: Buffer USDC
+            - generic [ref=e153]: $0.00
+          - generic [ref=e154]:
+            - text: DN Position
+            - generic [ref=e155]:
+              - generic [ref=e156]: Binance USDC
+              - generic [ref=e157]: $0.00
+            - generic [ref=e158]:
+              - generic [ref=e159]: dawnSOL (7.00%)
+              - generic [ref=e160]: 0.0000 ($0.00)
+            - generic [ref=e161]:
+              - generic [ref=e162]: PERP Unrealized
+              - generic [ref=e163]: $0.00
+      - generic [ref=e25]:
+        - heading "Performance" [level=3] [ref=e26]
+        - generic [ref=e164]:
+          - generic [ref=e165]:
+            - generic [ref=e166]: Total Return
+            - generic [ref=e167]: "-0.0171%"
+          - generic [ref=e168]:
+            - generic [ref=e169]: Annualized
+            - generic [ref=e170]: N/A (<7d)
+          - generic [ref=e171]:
+            - generic [ref=e172]: Sharpe Ratio
+            - generic [ref=e173]: N/A (<7d)
+          - generic [ref=e174]:
+            - generic [ref=e175]: Max Drawdown
+            - generic [ref=e176]: 0.0000%
+          - generic [ref=e177]:
+            - generic [ref=e178]: Unrealized PnL
+            - generic [ref=e179]: $-0.0086
+          - generic [ref=e180]:
+            - generic [ref=e181]: Total Fees
+            - generic [ref=e182]: $-0.0000
+          - generic [ref=e183]:
+            - generic [ref=e184]: Trading Days
+            - generic [ref=e185]: "1"
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - heading "Signals & Allocation" [level=2] [ref=e35]
+        - paragraph [ref=e37]: Funding and portfolio mix before live positions
+      - generic [ref=e38]:
+        - generic [ref=e40]:
+          - generic [ref=e41]:
+            - generic [ref=e42]:
+              - heading "Funding Rate (Annualized %) — 1M" [level=3] [ref=e43]
+              - generic [ref=e44]: Binance
+            - generic [ref=e46]:
+              - generic [ref=e47]: "-- Entry (10%)"
+              - generic [ref=e48]: "-- Exit (0%)"
+              - generic [ref=e49]: "-- Emergency (-10%)"
+          - table [ref=e188]:
+            - row [ref=e189]:
+              - cell
+              - cell [ref=e190]:
+                - link "Charting by TradingView" [ref=e194] [cursor=pointer]:
+                  - /url: https://www.tradingview.com/?utm_medium=lwc-link&utm_campaign=lwc-chart&utm_source=127.0.0.1/
+                  - img [ref=e195]
+              - cell [ref=e199]
+            - row [ref=e203]:
+              - cell
+              - cell [ref=e204]
+              - cell [ref=e208]
+        - generic [ref=e52]:
+          - heading "Strategy Allocation" [level=3] [ref=e53]
+          - generic [ref=e211]:
+            - generic [ref=e212]:
+              - 'generic "Lending: jupiter: $0.00 (0.0%)"'
+              - 'generic "Multiply: ONyc/USDC: $50.08 (100.0%)" [ref=e213]'
+            - generic [ref=e214]:
+              - generic [ref=e215]:
+                - generic [ref=e217]: "Lending: jupiter"
+                - generic [ref=e218]: 0.0%
+              - generic [ref=e219]:
+                - generic [ref=e221]: "Multiply: ONyc/USDC"
+                - generic [ref=e222]: 100.0%
+    - generic [ref=e56]:
+      - generic [ref=e58]:
+        - heading "Cumulative PnL (%)" [level=3] [ref=e60]
+        - generic [ref=e61]:
+          - button "1W" [ref=e62]
+          - button "1M" [ref=e63]
+          - button "ALL" [ref=e64]
+      - generic [ref=e66]:
+        - heading "Daily PnL (Last 30 Days)" [level=3] [ref=e67]
+        - table [ref=e223]:
+          - rowgroup [ref=e224]:
+            - row "Date NAV Start NAV End Return Lending Funding Fees" [ref=e225]:
+              - columnheader "Date" [ref=e226]
+              - columnheader "NAV Start" [ref=e227]
+              - columnheader "NAV End" [ref=e228]
+              - columnheader "Return" [ref=e229]
+              - columnheader "Lending" [ref=e230]
+              - columnheader "Funding" [ref=e231]
+              - columnheader "Fees" [ref=e232]
+          - rowgroup [ref=e233]:
+            - row "No data" [ref=e234]:
+              - cell "No data" [ref=e235]
+    - generic [ref=e73]:
+      - generic [ref=e74]:
+        - heading "Base Layer" [level=2] [ref=e76]
+        - paragraph [ref=e78]: Core lending and multiply positions
+      - generic [ref=e79]:
+        - generic [ref=e80]:
+          - heading "Multiply Positions" [level=3] [ref=e81]
+          - generic [ref=e237]:
+            - generic [ref=e238]:
+              - generic [ref=e241]: ONyc/USDC
+              - generic [ref=e242]: $50.09
+            - generic [ref=e243]:
+              - generic [ref=e244]:
+                - text: Health
+                - generic [ref=e245]: "1.237"
+              - generic [ref=e246]:
+                - text: APY
+                - generic [ref=e247]: 13.18%
+              - generic [ref=e248]:
+                - text: Leverage
+                - generic [ref=e249]: 2.30x
+              - generic [ref=e250]:
+                - text: Risk
+                - generic "Click to view risk breakdown" [ref=e251] [cursor=pointer]: "35"
+          - heading "Market Scanner" [level=4] [ref=e252]
+          - table [ref=e254]:
+            - rowgroup [ref=e255]:
+              - row "Market APY 24h Avg Risk Capacity" [ref=e256]:
+                - columnheader "Market" [ref=e257]
+                - columnheader "APY" [ref=e258]
+                - columnheader "24h Avg" [ref=e259]
+                - columnheader "Risk" [ref=e260]
+                - columnheader "Capacity" [ref=e261]
+            - rowgroup [ref=e262]:
+              - row "ONyc/USDCACTIVE 13.18% 12.42% 35 17087K" [ref=e263] [cursor=pointer]:
+                - cell "ONyc/USDCACTIVE" [ref=e264]
+                - cell "13.18%" [ref=e265]
+                - cell "12.42%" [ref=e266]
+                - cell "35" [ref=e267]
+                - cell "17087K" [ref=e268]
+              - row "USDG/PYUSD -3.83% 6.35% 30 40377K" [ref=e269] [cursor=pointer]:
+                - cell "USDG/PYUSD" [ref=e270]
+                - cell "-3.83%" [ref=e271]
+                - cell "6.35%" [ref=e272]
+                - cell "30" [ref=e273]
+                - cell "40377K" [ref=e274]
+        - generic [ref=e87]:
+          - heading "Lending Positions" [level=3] [ref=e88]
+          - generic [ref=e275]:
+            - generic [ref=e276]:
+              - generic [ref=e277]:
+                - generic [ref=e279]: kamino
+                - generic [ref=e280]: 1.99%
+              - generic [ref=e281]: $0.00
+            - generic [ref=e282]:
+              - generic [ref=e283]:
+                - generic [ref=e285]: jupiter
+                - generic [ref=e286]: 3.79%
+              - generic [ref=e287]: $0.00
+            - generic [ref=e288]:
+              - generic [ref=e289]: Total
+              - generic [ref=e290]: $0.00
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - heading "Alpha Layer" [level=2] [ref=e97]
+        - paragraph [ref=e99]: Funding capture and hedge overlays
+      - generic [ref=e101]:
+        - heading "Alpha Layer Positions" [level=3] [ref=e102]
+        - generic [ref=e291]:
+          - paragraph [ref=e292]: No active alpha positions
+          - generic [ref=e293]:
+            - generic [ref=e294]:
+              - text: dawnSOL
+              - generic [ref=e295]: "-"
+            - generic [ref=e296]:
+              - text: Binance USDC
+              - generic [ref=e297]: "-"
+            - generic [ref=e298]:
+              - text: PERP Short
+              - generic [ref=e299]: "-"
+            - generic [ref=e300]:
+              - text: Trigger
+              - generic [ref=e301]: Waiting for entry signal
+    - generic [ref=e109]:
+      - heading "Recent Events" [level=3] [ref=e110]
+      - table [ref=e302]:
+        - rowgroup [ref=e303]:
+          - row "Time Type Asset Amount Protocol" [ref=e304]:
+            - columnheader "Time" [ref=e305]
+            - columnheader "Type" [ref=e306]
+            - columnheader "Asset" [ref=e307]
+            - columnheader "Amount" [ref=e308]
+            - columnheader "Protocol" [ref=e309]
+        - rowgroup [ref=e310]:
+          - row "Apr 4, 17:17 alert USDC 2.5045 kamino-multiply:ONyc/USDC" [ref=e311]:
+            - cell "Apr 4, 17:17" [ref=e312]
+            - cell "alert" [ref=e313]
+            - cell "USDC" [ref=e314]
+            - cell "2.5045" [ref=e315]
+            - cell "kamino-multiply:ONyc/USDC" [ref=e316]
+          - row "Apr 4, 17:18 alert USDC 2.5045 kamino-multiply:ONyc/USDC" [ref=e317]:
+            - cell "Apr 4, 17:18" [ref=e318]
+            - cell "alert" [ref=e319]
+            - cell "USDC" [ref=e320]
+            - cell "2.5045" [ref=e321]
+            - cell "kamino-multiply:ONyc/USDC" [ref=e322]
+          - row "Apr 4, 20:11 alert USDC 2.5042 kamino-multiply:ONyc/USDC" [ref=e323]:
+            - cell "Apr 4, 20:11" [ref=e324]
+            - cell "alert" [ref=e325]
+            - cell "USDC" [ref=e326]
+            - cell "2.5042" [ref=e327]
+            - cell "kamino-multiply:ONyc/USDC" [ref=e328]
+          - row "Apr 4, 20:25 alert USDC 2.5042 kamino-multiply:ONyc/USDC" [ref=e329]:
+            - cell "Apr 4, 20:25" [ref=e330]
+            - cell "alert" [ref=e331]
+            - cell "USDC" [ref=e332]
+            - cell "2.5042" [ref=e333]
+            - cell "kamino-multiply:ONyc/USDC" [ref=e334]
+          - row "Apr 4, 20:26 state_change CONFIG 0.0000 -" [ref=e335]:
+            - cell "Apr 4, 20:26" [ref=e336]
+            - cell "state_change" [ref=e337]
+            - cell "CONFIG" [ref=e338]
+            - cell "0.0000" [ref=e339]
+            - cell "-" [ref=e340]
+    - generic [ref=e116]: Dawn Vault Strategy Bot — Real-time Dashboard
+  - button "Open Next.js Dev Tools" [ref=e122] [cursor=pointer]:
+    - img [ref=e123]
+  - alert [ref=e126]

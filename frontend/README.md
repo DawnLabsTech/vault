@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Frontend Dashboard
 
-## Getting Started
+Internal monitoring UI for the Dawn Vault bot.
 
-First, run the development server:
+## Purpose
+
+- Show the live portfolio split between the base layer and alpha layer.
+- Make the current operating stance explicit: `Multiply` is primary, `Lending` is supplementary, `DN` is conditional.
+- Surface the health, risk, and capacity signals that drive capital allocation.
+
+## Runtime Model
+
+- The frontend is a Next.js app that reads bot data through `/api/proxy/*`.
+- The proxy forwards requests to the bot API and can attach auth on both sides.
+- A zero-allocation alpha layer is a valid state. When funding is weak, the dashboard should read as "standby", not "broken".
+
+## Local Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd frontend
+npm install
+PORT=4001 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The frontend expects the bot API to be reachable at `http://localhost:3000` unless overridden.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Relevant environment variables:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `BOT_API_URL`: upstream bot API base URL. Default: `http://localhost:3000`
+- `BOT_API_TOKEN`: bearer token sent from the frontend proxy to the bot API
+- `FRONTEND_API_SECRET`: optional bearer token required by the frontend proxy itself
 
-## Learn More
+## Main Views
 
-To learn more about Next.js, take a look at the following resources:
+- `Bot / Portfolio / Performance`: top-line operating status and NAV
+- `Signals & Allocation`: funding gate plus current base/alpha capital mix
+- `Base Layer`: active Multiply position and supplementary lending sleeve
+- `Alpha Layer`: dawnSOL + perp hedge when active, standby otherwise
+- `PnL / Events`: realized performance history and operational audit trail
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Bot API Endpoints Used
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `/api/status`
+- `/api/apys`
+- `/api/multiply`
+- `/api/fr`
+- `/api/pnl`
+- `/api/events`

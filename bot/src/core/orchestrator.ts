@@ -4,6 +4,8 @@ import { Scheduler } from './scheduler.js';
 import { evaluateState, type StateSignals } from './state-machine.js';
 import { FrMonitor } from './fr-monitor.js';
 import { BaseAllocator } from '../strategies/base-allocator.js';
+import { CapitalAllocator } from '../strategies/capital-allocator.js';
+import { determineMultiplyRiskAction } from './multiply-risk-policy.js';
 import { DnExecutor, DnStep } from '../strategies/dn-executor.js';
 import { RiskManager } from '../risk/risk-manager.js';
 import { checkKillSwitch } from '../risk/guardrails.js';
@@ -15,7 +17,7 @@ import { getPrices } from '../connectors/prices.js';
 import { sendAlert } from '../utils/notify.js';
 import { getTxFeeInSol } from '../utils/tx-fee.js';
 import { SolanaRpc } from '../connectors/solana/rpc.js';
-import { BotState, EventType, ActionType, type PerpExchange, type PortfolioSnapshot, type Action, type FundingRateData } from '../types.js';
+import { BotState, EventType, ActionType, type PerpExchange, type PortfolioSnapshot, type Action, type FundingRateData, type RiskAssessment } from '../types.js';
 import type { BinanceRestClient } from '../connectors/binance/rest.js';
 import type { BinanceWsClient } from '../connectors/binance/ws.js';
 import type { KaminoLoopLending } from '../connectors/defi/kamino-loop.js';
@@ -32,6 +34,7 @@ export interface OrchestratorDeps {
   binanceWs: BinanceWsClient | null;
   frMonitor: FrMonitor;
   baseAllocator: BaseAllocator;
+  capitalAllocator?: CapitalAllocator | null;
   dnExecutor: DnExecutor;
   riskManager: RiskManager;
   solanaRpc: SolanaRpc;
@@ -47,6 +50,11 @@ interface PersistedState {
   botState: BotState;
   startedAt: string;
   lastDnStep: DnStep;
+}
+
+interface ActionExecutionResult {
+  success: boolean;
+  reason?: string;
 }
 
 export class Orchestrator {
@@ -121,7 +129,7 @@ export class Orchestrator {
       await this.takeSnapshot();
     });
 
-    // Lending rebalance — every 6h
+    // Base capital rebalance — every 6h (Multiply first, lending fallback)
     this.scheduler.register('lending-rebalance', config.general.lendingRebalanceIntervalMs, async () => {
       await this.rebalanceLending();
     });
@@ -278,6 +286,28 @@ export class Orchestrator {
       const result = evaluateState(signals, config);
 
       if (result.nextState !== this.botState) {
+        let actionFailureReason: string | undefined;
+        for (const action of result.actions) {
+          const execution = await this.executeAction(action);
+          if (!execution.success) {
+            actionFailureReason = execution.reason ?? `Action ${action.type} failed`;
+            break;
+          }
+        }
+
+        if (actionFailureReason) {
+          log.warn(
+            {
+              from: this.botState,
+              attemptedTo: result.nextState,
+              reason: result.reason,
+              actionFailureReason,
+            },
+            'State transition skipped because action execution did not succeed',
+          );
+          return;
+        }
+
         log.info({
           from: this.botState,
           to: result.nextState,
@@ -301,11 +331,6 @@ export class Orchestrator {
           result.actions.some(a => a.type === ActionType.EMERGENCY_EXIT) ? 'critical' : 'warning',
         );
 
-        // Execute actions
-        for (const action of result.actions) {
-          await this.executeAction(action);
-        }
-
         this.botState = result.nextState;
         this.persistState();
       }
@@ -315,7 +340,7 @@ export class Orchestrator {
     }
   }
 
-  private async executeAction(action: Action): Promise<void> {
+  private async executeAction(action: Action): Promise<ActionExecutionResult> {
     const config = getConfig();
 
     // Pre-trade risk check
@@ -324,12 +349,12 @@ export class Orchestrator {
     if (!riskCheck.approved) {
       log.warn({ action: action.type, reason: riskCheck.reason }, 'Action rejected by risk manager');
       await sendAlert(`Action ${action.type} blocked: ${riskCheck.reason}`, 'warning');
-      return;
+      return { success: false, reason: riskCheck.reason };
     }
 
     if (config.general.dryRun) {
       log.info({ action: action.type }, 'DRY RUN: Would execute action');
-      return;
+      return { success: true, reason: 'dry_run' };
     }
 
     switch (action.type) {
@@ -339,8 +364,10 @@ export class Orchestrator {
           const usdcAmount = (action.params.usdcAmount as number) || 0;
           await this.deps.dnExecutor.startEntry(usdcAmount);
         } catch (err) {
-          log.error({ error: (err as Error).message }, 'DN entry failed');
-          await sendAlert(`DN entry failed: ${(err as Error).message}`, 'critical');
+          const reason = (err as Error).message;
+          log.error({ error: reason }, 'DN entry failed');
+          await sendAlert(`DN entry failed: ${reason}`, 'critical');
+          return { success: false, reason };
         } finally {
           this.dnOperationInProgress = false;
           this.persistState();
@@ -353,8 +380,10 @@ export class Orchestrator {
         try {
           await this.deps.dnExecutor.startExit();
         } catch (err) {
-          log.error({ error: (err as Error).message }, 'DN exit failed');
-          await sendAlert(`DN exit failed: ${(err as Error).message}`, 'critical');
+          const reason = (err as Error).message;
+          log.error({ error: reason }, 'DN exit failed');
+          await sendAlert(`DN exit failed: ${reason}`, 'critical');
+          return { success: false, reason };
         } finally {
           this.dnOperationInProgress = false;
           this.persistState();
@@ -362,13 +391,20 @@ export class Orchestrator {
         break;
       }
       case ActionType.REBALANCE_LENDING: {
-        await this.rebalanceLending();
+        try {
+          await this.rebalanceLending();
+        } catch (err) {
+          const reason = (err as Error).message;
+          log.error({ error: reason }, 'Lending rebalance action failed');
+          return { success: false, reason };
+        }
         break;
       }
     }
 
     // Action completed — invalidate snapshot cache since portfolio changed
     this.snapshotCache = null;
+    return { success: true };
   }
 
   private async rebalanceLending(): Promise<void> {
@@ -385,7 +421,9 @@ export class Orchestrator {
         log.warn({ error: (err as Error).message }, 'Failed to fetch wallet USDC balance');
       }
 
-      const result = await this.deps.baseAllocator.rebalance(walletUsdc);
+      const result = this.deps.capitalAllocator
+        ? await this.deps.capitalAllocator.rebalance(walletUsdc)
+        : await this.deps.baseAllocator.rebalance(walletUsdc);
       if (result.events.length > 0) {
         for (const event of result.events) {
           recordEvent(event);
@@ -647,30 +685,83 @@ export class Orchestrator {
   }
 
   /**
-   * Monitor all Kamino Multiply positions' health rates.
+   * Monitor all Kamino Multiply positions' health and risk levels.
    */
   private async checkKaminoMultiplyHealth(): Promise<void> {
     const adapters = this.deps.kaminoMultiplyAdapters;
     if (!adapters || adapters.length === 0) return;
 
+    const scanner = this.deps.marketScanner;
+    const rejectRiskScore = scanner?.getRejectThreshold() ?? 75;
+    const emergencyRiskScore = scanner?.getEmergencyThreshold() ?? 90;
+    const activeLabels = adapters.map((adapter) => adapter.getMultiplyConfig().label);
+
+    let refreshedRiskAssessments = new Map<string, RiskAssessment>();
+    if (scanner) {
+      try {
+        refreshedRiskAssessments = await scanner.refreshRiskAssessments(activeLabels);
+      } catch (err) {
+        log.warn({ error: (err as Error).message }, 'Failed to refresh Multiply risk assessments');
+      }
+    }
+
     for (const adapter of adapters) {
       try {
-        const health = await adapter.getHealthRate();
-        if (health === Infinity) continue;
-
         const cfg = adapter.getMultiplyConfig();
         const label = cfg.label;
         const config = getConfig();
+        const [health, currentBalance] = await Promise.all([
+          adapter.getHealthRate(),
+          adapter.getBalance(),
+        ]);
+        const riskAssessment =
+          refreshedRiskAssessments.get(label) ??
+          scanner?.getLatestRiskAssessment(label) ??
+          null;
 
-        log.debug({ label, healthRate: health }, 'Kamino Multiply health check');
+        if (health === Infinity && currentBalance < 0.01) continue;
 
-        // Tier 1: Emergency — full deleverage
-        if (health < cfg.emergencyHealthRate) {
-          log.error({ label, health, threshold: cfg.emergencyHealthRate }, 'Kamino Multiply health CRITICAL');
-          await sendAlert(
-            `Kamino Multiply [${label}] health CRITICAL: ${health.toFixed(3)}\nTriggering emergency deleverage`,
-            'critical',
+        log.debug(
+          {
+            label,
+            healthRate: health,
+            balance: currentBalance,
+            riskScore: riskAssessment?.compositeScore ?? null,
+          },
+          'Kamino Multiply health/risk check',
+        );
+
+        const riskAction = determineMultiplyRiskAction({
+          currentBalance,
+          healthRate: health,
+          alertHealthRate: cfg.alertHealthRate,
+          emergencyHealthRate: cfg.emergencyHealthRate,
+          riskAssessment,
+          rejectRiskScore,
+          emergencyRiskScore,
+        });
+
+        // Tier 1: Emergency — full exit when health or risk is critical
+        if (riskAction.type === 'emergency') {
+          log.error(
+            {
+              label,
+              health,
+              healthThreshold: cfg.emergencyHealthRate,
+              riskScore: riskAssessment?.compositeScore ?? null,
+              riskThreshold: emergencyRiskScore,
+            },
+            'Kamino Multiply emergency deleverage triggered',
           );
+
+          const message =
+            riskAction.reason === 'health_and_risk_emergency'
+              ? `Kamino Multiply [${label}] emergency: health ${health.toFixed(3)} < ${cfg.emergencyHealthRate}, risk ${(riskAssessment?.compositeScore ?? 0).toFixed(1)} >= ${emergencyRiskScore}\nTriggering full exit`
+              : riskAction.reason === 'risk_emergency'
+                ? `Kamino Multiply [${label}] risk EMERGENCY: score ${(riskAssessment?.compositeScore ?? 0).toFixed(1)} >= ${emergencyRiskScore}\nTriggering full exit`
+                : `Kamino Multiply [${label}] health CRITICAL: ${health.toFixed(3)} < ${cfg.emergencyHealthRate}\nTriggering emergency deleverage`;
+
+          await sendAlert(message, 'critical');
 
           if (!config.general.dryRun) {
             const txSigs = await adapter.emergencyDeleverage();
@@ -682,43 +773,78 @@ export class Orchestrator {
                 asset: 'USD',
                 txHash: txSig,
                 sourceProtocol: adapter.name,
-                metadata: { action: 'emergency_deleverage', healthRate: health },
+                metadata: {
+                  action: riskAction.reason === 'risk_emergency' || riskAction.reason === 'health_and_risk_emergency'
+                    ? 'risk_emergency_exit'
+                    : 'emergency_deleverage',
+                  healthRate: health,
+                  riskScore: riskAssessment?.compositeScore ?? null,
+                  trigger: riskAction.reason,
+                },
               });
             }
             await sendAlert(`[${label}] Emergency deleverage complete`, 'critical');
           } else {
-            log.info({ label }, 'DRY RUN: Would trigger emergency deleverage');
+            log.info({ label, reason: riskAction.reason }, 'DRY RUN: Would trigger emergency deleverage');
           }
 
-        // Tier 2: Soft deleverage — reduce position by 20%
-        } else if (health < cfg.alertHealthRate) {
-          log.warn({ label, health, threshold: cfg.alertHealthRate }, 'Kamino Multiply health WARNING — soft deleverage');
+        // Tier 2: Soft deleverage — reduce size when health or risk crosses warning thresholds
+        } else if (riskAction.type === 'reduce') {
+          log.warn(
+            {
+              label,
+              health,
+              balance: currentBalance,
+              reduceAmount: riskAction.amount,
+              targetBalance: riskAction.targetBalance,
+              riskScore: riskAssessment?.compositeScore ?? null,
+              maxPositionCap: riskAssessment?.maxPositionCap ?? null,
+            },
+            'Kamino Multiply soft deleverage triggered',
+          );
 
           if (!config.general.dryRun) {
-            const currentBalance = await adapter.getBalance();
-            const reduceAmount = Math.floor(currentBalance * 0.2);
-
-            if (reduceAmount > 1) {
+            if (riskAction.amount > 1) {
+              const message =
+                riskAction.reason === 'health_and_risk_soft'
+                  ? `Kamino Multiply [${label}] soft deleverage: health ${health.toFixed(3)} < ${cfg.alertHealthRate}, risk ${(riskAssessment?.compositeScore ?? 0).toFixed(1)} >= ${rejectRiskScore}\nReducing by $${riskAction.amount.toFixed(2)} to target $${riskAction.targetBalance.toFixed(2)}`
+                  : riskAction.reason === 'risk_soft'
+                    ? `Kamino Multiply [${label}] risk reduction: score ${(riskAssessment?.compositeScore ?? 0).toFixed(1)} >= ${rejectRiskScore}\nReducing by $${riskAction.amount.toFixed(2)} to cap $${(riskAssessment?.maxPositionCap ?? riskAction.targetBalance).toFixed(2)}`
+                    : `Kamino Multiply [${label}] soft deleverage: health ${health.toFixed(3)} < ${cfg.alertHealthRate}\nReducing position by $${riskAction.amount.toFixed(2)}`;
               await sendAlert(
-                `Kamino Multiply [${label}] soft deleverage: health ${health.toFixed(3)} < ${cfg.alertHealthRate}\nReducing position by 20% ($${reduceAmount})`,
+                message,
                 'warning',
               );
 
-              const txSig = await adapter.withdraw(reduceAmount);
+              const txSig = await adapter.withdraw(riskAction.amount);
               recordEvent({
                 timestamp: new Date().toISOString(),
                 eventType: EventType.ALERT,
-                amount: reduceAmount,
+                amount: riskAction.amount,
                 asset: 'USD',
                 txHash: txSig,
                 sourceProtocol: adapter.name,
-                metadata: { action: 'soft_deleverage', healthRate: health, reducePct: 20 },
+                metadata: {
+                  action: riskAction.reason === 'risk_soft' || riskAction.reason === 'health_and_risk_soft'
+                    ? 'risk_soft_deleverage'
+                    : 'soft_deleverage',
+                  healthRate: health,
+                  riskScore: riskAssessment?.compositeScore ?? null,
+                  maxPositionCap: riskAssessment?.maxPositionCap ?? null,
+                  reducePct: currentBalance > 0
+                    ? Number(((riskAction.amount / currentBalance) * 100).toFixed(2))
+                    : 0,
+                  trigger: riskAction.reason,
+                },
               });
 
-              log.info({ label, reduceAmount, txSig }, 'Soft deleverage complete');
+              log.info({ label, reduceAmount: riskAction.amount, txSig }, 'Soft deleverage complete');
             }
           } else {
-            log.info({ label }, 'DRY RUN: Would trigger soft deleverage (20% reduction)');
+            log.info(
+              { label, reason: riskAction.reason, amount: riskAction.amount },
+              'DRY RUN: Would trigger soft deleverage',
+            );
           }
 
         // Tier 3: Elevated monitoring — increase poll frequency
@@ -823,13 +949,24 @@ export class Orchestrator {
           diffBps: recommendation.diffBps,
           fromApy: `${(recommendation.fromApy * 100).toFixed(2)}%`,
           toApy: `${(recommendation.toApy * 100).toFixed(2)}%`,
+          expectedGainUsd: recommendation.expectedGainUsd?.toFixed(2),
+          estimatedSwitchCostUsd: recommendation.estimatedSwitchCostUsd?.toFixed(2),
+          netExpectedGainUsd: recommendation.netExpectedGainUsd?.toFixed(2),
         },
         'Multiply market switch triggered',
       );
 
+      const economicsSummary =
+        recommendation.expectedGainUsd !== undefined &&
+        recommendation.estimatedSwitchCostUsd !== undefined &&
+        recommendation.netExpectedGainUsd !== undefined
+          ? `\nExpected gain (${recommendation.paybackWindowDays}d): $${recommendation.expectedGainUsd.toFixed(2)} | Cost: $${recommendation.estimatedSwitchCostUsd.toFixed(2)} | Net: $${recommendation.netExpectedGainUsd.toFixed(2)}`
+          : '';
+
       await sendAlert(
         `Multiply market switch: ${recommendation.from} → ${recommendation.to}\n` +
-        `APY: ${(recommendation.fromApy * 100).toFixed(2)}% → ${(recommendation.toApy * 100).toFixed(2)}% (+${recommendation.diffBps}bps)`,
+        `APY: ${(recommendation.fromApy * 100).toFixed(2)}% → ${(recommendation.toApy * 100).toFixed(2)}% (+${recommendation.diffBps}bps)` +
+        economicsSummary,
         'warning',
       );
 
@@ -891,12 +1028,8 @@ export class Orchestrator {
         });
       }
 
-      // Step 6: Hot-swap adapter references
-      const oldName = currentAdapter.name;
+      // Step 6: Hot-swap active multiply adapter reference
       adapters[0] = newAdapter;
-
-      // Update base allocator
-      this.deps.baseAllocator.replaceProtocol(oldName, newAdapter);
 
       // Record switch for holding period tracking
       scanner.recordSwitch();

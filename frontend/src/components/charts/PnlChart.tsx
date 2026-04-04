@@ -9,6 +9,14 @@ import { formatPct } from '@/lib/format';
 
 type Range = '1W' | '1M' | 'ALL';
 
+function getFallbackDays(range: Range): number {
+  switch (range) {
+    case '1W': return 7;
+    case '1M': return 30;
+    case 'ALL': return 30;
+  }
+}
+
 function getFromDate(range: Range): string | undefined {
   const now = Date.now();
   switch (range) {
@@ -16,6 +24,18 @@ function getFromDate(range: Range): string | undefined {
     case '1M': return new Date(now - 30 * 86_400_000).toISOString().split('T')[0];
     case 'ALL': return undefined;
   }
+}
+
+function buildFlatZeroSeries(range: Range) {
+  const days = getFallbackDays(range);
+  const data = [];
+
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const date = new Date(Date.now() - i * 86_400_000).toISOString().split('T')[0]!;
+    data.push({ time: date as string, value: 0 });
+  }
+
+  return data;
 }
 
 export function PnlChart() {
@@ -41,7 +61,7 @@ export function PnlChart() {
         horzLines: { color: '#222' },
       },
       width: containerRef.current.clientWidth,
-      height: 300,
+      height: 240,
       timeScale: { borderColor: '#333' },
       rightPriceScale: { borderColor: '#333' },
     });
@@ -58,6 +78,7 @@ export function PnlChart() {
     const observer = new ResizeObserver(() => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth });
+        chart.timeScale().fitContent();
       }
     });
     observer.observe(containerRef.current);
@@ -76,17 +97,18 @@ export function PnlChart() {
           time: d.date as string,
           value: d.cumulativeReturn * 100,
         }))
-      : [{ time: new Date().toISOString().split('T')[0] as string, value: 0 }];
+      : buildFlatZeroSeries(range);
 
     seriesRef.current.setData(chartData);
     chartRef.current?.timeScale().fitContent();
-  }, [data]);
+  }, [data, range]);
 
   const ranges: Range[] = ['1W', '1M', 'ALL'];
 
   const annualizedLabel = perfData && perfData.totalDays >= 7
     ? formatPct(perfData.annualizedReturn)
     : null;
+  const hasData = !!data?.length;
 
   return (
     <div className="bg-vault-card border border-vault-border rounded-lg p-4">
@@ -120,11 +142,17 @@ export function PnlChart() {
           ))}
         </div>
       </div>
-      {isLoading ? (
-        <Skeleton className="h-[300px] w-full" />
-      ) : (
-        <div ref={containerRef} />
-      )}
+      {isLoading && <Skeleton className="h-[240px] w-full" />}
+      <div className="relative">
+        <div ref={containerRef} style={{ display: isLoading ? 'none' : undefined }} />
+        {!isLoading && !hasData && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <span className="text-2xl font-bold text-vault-text-bright">
+              {formatPct(0)}
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

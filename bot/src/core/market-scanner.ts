@@ -4,6 +4,7 @@ import { getPrimeApy, PRIME_MINT } from '../connectors/defi/hastra-apy.js';
 import { MultiplyRiskScorer } from '../risk/multiply-risk-scorer.js';
 import type { MultiplyCandidate, MultiplyRebalanceConfig, CapacityInfo, RiskAssessment } from '../types.js';
 import type Database from 'better-sqlite3';
+import { evaluateSwitchEconomics } from './switch-economics.js';
 
 const log = createChildLogger('market-scanner');
 
@@ -29,6 +30,11 @@ export interface SwitchRecommendation {
   toApy: number;
   diffBps: number;
   candidate: MultiplyCandidate;
+  paybackWindowDays?: number;
+  expectedGainUsd?: number;
+  estimatedSwitchCostUsd?: number;
+  netExpectedGainUsd?: number;
+  minNetGainUsd?: number;
 }
 
 interface ApyRecord {
@@ -381,16 +387,56 @@ export class MarketScanner {
     if (bestLabel === currentLabel) return null;
 
     const diffBps = Math.round((bestAvg - currentAvg) * 10_000);
+    const bestCandidate = this.candidates.find((c) => c.label === bestLabel)!;
+    const deployableUsd = Math.max(deployableAmount ?? 0, 0);
 
-    if (diffBps < this.config.minDiffBps) {
+    if (deployableUsd <= 0.01) {
+      if (diffBps < this.config.minDiffBps) {
+        log.debug(
+          { current: currentLabel, best: bestLabel, diffBps, minDiffBps: this.config.minDiffBps },
+          'APY diff below threshold for zero-balance adapter preselection',
+        );
+        return null;
+      }
+
+      return {
+        from: currentLabel,
+        to: bestLabel,
+        fromApy: currentAvg,
+        toApy: bestAvg,
+        diffBps,
+        candidate: bestCandidate,
+      };
+    }
+
+    const paybackWindowDays = this.config.paybackWindowDays ?? this.config.minHoldingDays;
+    const minNetGainUsd = this.config.minNetGainUsd ?? 0;
+    const economics = evaluateSwitchEconomics({
+      deployableAmountUsd: deployableUsd,
+      apyDiff: bestAvg - currentAvg,
+      paybackWindowDays,
+      estimatedSwitchCostBps: this.config.estimatedSwitchCostBps ?? 0,
+      estimatedSwitchCostUsd: this.config.estimatedSwitchCostUsd ?? 0,
+      minNetGainUsd,
+    });
+
+    if (!economics.shouldSwitch) {
       log.debug(
-        { current: currentLabel, best: bestLabel, diffBps, minDiffBps: this.config.minDiffBps },
-        'APY diff below threshold',
+        {
+          current: currentLabel,
+          best: bestLabel,
+          deployableUsd: deployableUsd.toFixed(2),
+          diffBps,
+          paybackWindowDays,
+          expectedGainUsd: economics.expectedGainUsd.toFixed(2),
+          estimatedSwitchCostUsd: economics.estimatedSwitchCostUsd.toFixed(2),
+          netExpectedGainUsd: economics.netExpectedGainUsd.toFixed(2),
+          minNetGainUsd: minNetGainUsd.toFixed(2),
+        },
+        'Switch economics did not clear payback window threshold',
       );
       return null;
     }
-
-    const bestCandidate = this.candidates.find((c) => c.label === bestLabel)!;
 
     log.info(
       {
@@ -399,6 +445,10 @@ export class MarketScanner {
         fromApy: `${(currentAvg * 100).toFixed(2)}%`,
         toApy: `${(bestAvg * 100).toFixed(2)}%`,
         diffBps,
+        paybackWindowDays,
+        expectedGainUsd: economics.expectedGainUsd.toFixed(2),
+        estimatedSwitchCostUsd: economics.estimatedSwitchCostUsd.toFixed(2),
+        netExpectedGainUsd: economics.netExpectedGainUsd.toFixed(2),
       },
       'Market switch recommended',
     );
@@ -410,6 +460,11 @@ export class MarketScanner {
       toApy: bestAvg,
       diffBps,
       candidate: bestCandidate,
+      paybackWindowDays,
+      expectedGainUsd: economics.expectedGainUsd,
+      estimatedSwitchCostUsd: economics.estimatedSwitchCostUsd,
+      netExpectedGainUsd: economics.netExpectedGainUsd,
+      minNetGainUsd,
     };
   }
 
@@ -439,7 +494,37 @@ export class MarketScanner {
     return this.latestRiskAssessments;
   }
 
-  private getRejectThreshold(): number {
-    return this.riskScorer?.getRejectThreshold() ?? 90;
+  async refreshRiskAssessments(labels?: string[]): Promise<Map<string, RiskAssessment>> {
+    if (!this.riskScorer) return new Map();
+
+    const wanted = labels ? new Set(labels) : null;
+    const candidates = wanted
+      ? this.candidates.filter((candidate) => wanted.has(candidate.label))
+      : this.candidates;
+
+    const results = await Promise.allSettled(
+      candidates.map((candidate) => this.riskScorer!.assessCandidate(candidate, this.maxPositionCapUsd)),
+    );
+
+    const refreshed = new Map<string, RiskAssessment>();
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue;
+      refreshed.set(result.value.label, result.value);
+      this.latestRiskAssessments.set(result.value.label, result.value);
+    }
+
+    return refreshed;
+  }
+
+  getLatestRiskAssessment(label: string): RiskAssessment | null {
+    return this.latestRiskAssessments.get(label) ?? null;
+  }
+
+  getRejectThreshold(): number {
+    return this.riskScorer?.getRejectThreshold() ?? 75;
+  }
+
+  getEmergencyThreshold(): number {
+    return this.riskScorer?.getEmergencyThreshold() ?? 90;
   }
 }

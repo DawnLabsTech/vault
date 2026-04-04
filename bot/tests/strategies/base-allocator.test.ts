@@ -124,12 +124,20 @@ describe('BaseAllocator.calculateOptimalAllocation', () => {
     expect(kaminoAlloc!.amount).toBe(9_500);
   });
 
-  it('returns empty array when no APY ranking data', () => {
+  it('falls back to configured protocol order when no APY ranking data', () => {
     const protocols = [makeMockProtocol('kamino', 0.06, 0)];
     const allocator = new BaseAllocator(protocols, config);
 
     const result = allocator.calculateOptimalAllocation(10_000, new Map(), []);
-    expect(result).toEqual([]);
+    expect(result).toEqual([
+      {
+        protocol: 'kamino',
+        currentBalance: 0,
+        targetBalance: 9_500,
+        action: 'deposit',
+        amount: 9_500,
+      },
+    ]);
   });
 
   it('respects buffer percentage', () => {

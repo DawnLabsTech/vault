@@ -53,6 +53,28 @@ function alertLevelColor(level: string): string {
   }
 }
 
+function riskPolicy(score: number): { label: string; detail: string; badgeClass: string } {
+  if (score >= 90) {
+    return {
+      label: 'EXIT',
+      detail: '>=90: full exit / emergency deleverage',
+      badgeClass: 'bg-vault-negative/15 text-vault-negative border-vault-negative/30',
+    };
+  }
+  if (score >= 75) {
+    return {
+      label: 'TRIM',
+      detail: '75-89: stop adds and trim down to risk cap',
+      badgeClass: 'bg-vault-warning/15 text-vault-warning border-vault-warning/30',
+    };
+  }
+  return {
+    label: 'NORMAL',
+    detail: '<75: normal operation',
+    badgeClass: 'bg-vault-accent/15 text-vault-accent border-vault-accent/30',
+  };
+}
+
 const DIMENSION_LABELS: Record<string, string> = {
   depegRisk: 'Depeg Risk',
   liquidationProximity: 'Liquidation',
@@ -142,6 +164,8 @@ function RiskDimensionBar({ name, score, risk }: { name: string; score: number; 
 }
 
 function RiskDetailPanel({ risk, label }: { risk: RiskAssessmentData; label: string }) {
+  const policy = riskPolicy(risk.compositeScore);
+
   return (
     <div className="mt-2 p-3 rounded-md border border-vault-border/30 bg-vault-bg/50">
       <div className="flex items-center justify-between mb-3">
@@ -183,6 +207,16 @@ function RiskDetailPanel({ risk, label }: { risk: RiskAssessmentData; label: str
         </div>
       </div>
 
+      <div className="flex items-start justify-between gap-3 text-xs border-t border-vault-border/20 pt-2 mt-2">
+        <span className="text-vault-muted shrink-0">Policy</span>
+        <div className="text-right">
+          <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide ${policy.badgeClass}`}>
+            {policy.label}
+          </span>
+          <p className="mt-1 text-[10px] text-vault-muted/70">{policy.detail}</p>
+        </div>
+      </div>
+
       <div className="text-[10px] text-vault-muted/60 border-t border-vault-border/20 pt-2 mt-2 leading-relaxed">
         <p>Composite = weighted sum of 4 dimensions. Risk is a separate axis from displayed APY. Click each bar to inspect the exact inputs behind the score.</p>
       </div>
@@ -194,6 +228,7 @@ function PositionRow({ pos, risk }: { pos: MultiplyPosition; risk?: RiskAssessme
   const [showRisk, setShowRisk] = useState(false);
   const hColor = healthColor(pos.healthRate, pos.targetHealthRate, pos.alertHealthRate, pos.emergencyHealthRate);
   const hBg = healthBg(pos.healthRate, pos.alertHealthRate, pos.emergencyHealthRate);
+  const policy = risk ? riskPolicy(risk.compositeScore) : null;
 
   return (
     <div className={`rounded-md p-3 border border-vault-border/30 ${hBg}`}>
@@ -220,12 +255,19 @@ function PositionRow({ pos, risk }: { pos: MultiplyPosition; risk?: RiskAssessme
         <div>
           <span className="text-vault-muted">Risk</span>
           {risk ? (
-            <div
-              className={`font-bold cursor-pointer hover:underline ${riskScoreColor(risk.compositeScore)}`}
-              onClick={() => setShowRisk((v) => !v)}
-              title="Click to view risk breakdown"
-            >
-              {risk.compositeScore.toFixed(0)}
+            <div className="mt-0.5 space-y-1">
+              <div
+                className={`font-bold cursor-pointer hover:underline ${riskScoreColor(risk.compositeScore)}`}
+                onClick={() => setShowRisk((v) => !v)}
+                title="Click to view risk breakdown"
+              >
+                {risk.compositeScore.toFixed(0)}
+              </div>
+              {policy && (
+                <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide ${policy.badgeClass}`}>
+                  {policy.label}
+                </span>
+              )}
             </div>
           ) : (
             <div className="font-bold text-vault-muted">-</div>

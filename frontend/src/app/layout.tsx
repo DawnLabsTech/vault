@@ -9,7 +9,7 @@ const mono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: 'Dawn Vault Dashboard',
-  description: 'Real-time monitoring dashboard for Vault Strategy Bot',
+  description: 'Internal dashboard for base-first vault operations and conditional DN activation',
 };
 
 export default function RootLayout({

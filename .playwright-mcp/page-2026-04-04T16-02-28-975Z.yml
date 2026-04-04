@@ -1,0 +1,50 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - heading "Dawn Vault Dashboard" [level=1] [ref=e5]
+      - generic [ref=e6]:
+        - generic [ref=e7]: LIVE
+        - generic [ref=e9]: 30s
+    - generic [ref=e10]:
+      - heading "Bot Status" [level=3] [ref=e12]
+      - heading "Portfolio" [level=3] [ref=e19]
+      - heading "Performance" [level=3] [ref=e26]
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - heading "Signals & Allocation" [level=2] [ref=e35]
+        - paragraph [ref=e37]: Funding and portfolio mix before live positions
+      - generic [ref=e38]:
+        - generic [ref=e41]:
+          - generic [ref=e42]:
+            - heading "Funding Rate (Annualized %) — 1M" [level=3] [ref=e43]
+            - generic [ref=e44]: Binance
+          - generic [ref=e46]:
+            - generic [ref=e47]: "-- Entry (10%)"
+            - generic [ref=e48]: "-- Exit (0%)"
+            - generic [ref=e49]: "-- Emergency (-10%)"
+        - heading "Strategy Allocation" [level=3] [ref=e53]
+    - generic [ref=e56]:
+      - generic [ref=e58]:
+        - heading "Cumulative PnL (%)" [level=3] [ref=e60]
+        - generic [ref=e61]:
+          - button "1W" [ref=e62]
+          - button "1M" [ref=e63]
+          - button "ALL" [ref=e64]
+      - heading "Daily PnL (Last 30 Days)" [level=3] [ref=e67]
+    - generic [ref=e73]:
+      - generic [ref=e74]:
+        - heading "Base Layer" [level=2] [ref=e76]
+        - paragraph [ref=e78]: Core lending and multiply positions
+      - generic [ref=e79]:
+        - heading "Multiply Positions" [level=3] [ref=e81]
+        - heading "Lending Positions" [level=3] [ref=e88]
+    - generic [ref=e94]:
+      - generic [ref=e95]:
+        - heading "Alpha Layer" [level=2] [ref=e97]
+        - paragraph [ref=e99]: Funding capture and hedge overlays
+      - heading "Alpha Layer Positions" [level=3] [ref=e102]
+    - heading "Recent Events" [level=3] [ref=e110]
+    - generic [ref=e116]: Dawn Vault Strategy Bot — Real-time Dashboard
+  - button "Open Next.js Dev Tools" [ref=e122] [cursor=pointer]:
+    - img [ref=e123]
+  - alert [ref=e126]

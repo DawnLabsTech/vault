@@ -10,11 +10,11 @@ export function AllocationChart() {
 
   if (isLoading || !s) {
     return (
-      <div className="bg-vault-card border border-vault-border rounded-lg p-4">
+      <div className="bg-vault-card border border-vault-border rounded-lg p-4 h-full min-h-[314px] flex flex-col">
         <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider mb-3">
-          Strategy Allocation
+          Live Allocation
         </h3>
-        <Skeleton className="h-[250px] w-full" />
+        <Skeleton className="h-[250px] w-full flex-1" />
       </div>
     );
   }
@@ -76,14 +76,16 @@ export function AllocationChart() {
   const filtered = segments.filter((seg) => seg.value > 0);
 
   return (
-    <div className="bg-vault-card border border-vault-border rounded-lg p-4">
+    <div className="bg-vault-card border border-vault-border rounded-lg p-4 h-full min-h-[314px] flex flex-col">
       <h3 className="text-vault-accent text-xs font-bold uppercase tracking-wider mb-3">
-        Strategy Allocation
+        Live Allocation
       </h3>
       {filtered.length === 0 ? (
-        <p className="text-vault-muted text-sm">No allocation data</p>
+        <div className="min-h-[250px] flex-1 flex items-center justify-center">
+          <p className="text-vault-muted text-sm">No allocation data</p>
+        </div>
       ) : (
-        <div className="space-y-3">
+        <div className="min-h-[250px] flex-1 flex flex-col justify-center gap-6">
           {/* Stacked bar */}
           <div className="flex h-6 rounded overflow-hidden">
             {filtered.map((seg) => (
@@ -99,7 +101,7 @@ export function AllocationChart() {
             ))}
           </div>
           {/* Legend */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {filtered.map((seg) => (
               <div key={seg.label} className="flex items-center gap-2 text-xs">
                 <span

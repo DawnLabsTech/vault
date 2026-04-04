@@ -72,22 +72,18 @@ export class FrMonitor {
 
   /**
    * Average annualized FR over the last `days` days.
-   * Records per day depends on exchange (3 for 8h Binance).
+   * Only full days are counted; a day becomes valid once all expected FR samples arrive.
    */
   getAverageAnnualized(days: number): number {
-    const limit = days * this.periodsPerDay;
-    const row = this.db
-      .prepare(
-        `SELECT AVG(annualized_rate) AS avg_rate
-         FROM (
-           SELECT annualized_rate FROM fr_history
-           ORDER BY timestamp DESC
-           LIMIT ?
-         )`,
-      )
-      .get(limit) as { avg_rate: number | null } | undefined;
+    const completeDays = this.getDailySummaries()
+      .filter((row) => row.sampleCount >= this.periodsPerDay)
+      .slice(0, days);
 
-    return row?.avg_rate ?? 0;
+    if (completeDays.length === 0) return 0;
+
+    const avg =
+      completeDays.reduce((sum, row) => sum + row.avgRate, 0) / completeDays.length;
+    return avg;
   }
 
   /**
@@ -124,41 +120,67 @@ export class FrMonitor {
    * Shared logic for consecutive-day counting.
    *
    * Strategy:
-   * 1. Group FR records by UTC date, compute MIN or MAX of annualized_rate per day.
-   * 2. For "above": the day qualifies if MIN(annualized_rate) > threshold
-   *    (i.e. every FR that day was above).
-   * 3. For "below": the day qualifies if MAX(annualized_rate) < threshold.
-   * 4. Walk days from most recent backwards, counting consecutive qualifying days.
+   * 1. Group FR records by UTC date.
+   * 2. Ignore the current partial day until all expected FR samples arrive.
+   * 3. After the streak starts, each prior UTC day must be complete and contiguous.
+   * 4. For "above": the day qualifies if MIN(annualized_rate) > threshold.
+   * 5. For "below": the day qualifies if MAX(annualized_rate) < threshold.
    */
   private countConsecutiveDays(
     thresholdAnnualized: number,
     direction: 'above' | 'below',
   ): number {
-    const aggFn = direction === 'above' ? 'MIN' : 'MAX';
+    const rows = this.getDailySummaries();
 
-    const rows = this.db
+    let count = 0;
+    let lastQualifiedDay: string | null = null;
+
+    for (const row of rows) {
+      if (lastQualifiedDay === null && row.sampleCount < this.periodsPerDay) {
+        continue;
+      }
+
+      if (row.sampleCount < this.periodsPerDay) {
+        break;
+      }
+
+      if (
+        lastQualifiedDay !== null &&
+        row.day !== previousUtcDate(lastQualifiedDay)
+      ) {
+        break;
+      }
+
+      const qualifies =
+        direction === 'above'
+          ? row.minRate > thresholdAnnualized
+          : row.maxRate < thresholdAnnualized;
+
+      if (qualifies) {
+        count++;
+        lastQualifiedDay = row.day;
+      } else {
+        break;
+      }
+    }
+
+    return count;
+  }
+
+  private getDailySummaries(): DailyFrSummary[] {
+    return this.db
       .prepare(
-        `SELECT DATE(timestamp) AS day, ${aggFn}(annualized_rate) AS agg_rate
+        `SELECT
+           DATE(timestamp) AS day,
+           COUNT(*) AS sampleCount,
+           MIN(annualized_rate) AS minRate,
+           MAX(annualized_rate) AS maxRate,
+           AVG(annualized_rate) AS avgRate
          FROM fr_history
          GROUP BY DATE(timestamp)
          ORDER BY day DESC`,
       )
-      .all() as Array<{ day: string; agg_rate: number }>;
-
-    let count = 0;
-    for (const row of rows) {
-      const qualifies =
-        direction === 'above'
-          ? row.agg_rate > thresholdAnnualized
-          : row.agg_rate < thresholdAnnualized;
-
-      if (qualifies) {
-        count++;
-      } else {
-        break; // streak broken
-      }
-    }
-    return count;
+      .all() as DailyFrSummary[];
   }
 }
 
@@ -173,6 +195,14 @@ interface FrRow {
   mark_price: number | null;
 }
 
+interface DailyFrSummary {
+  day: string;
+  sampleCount: number;
+  minRate: number;
+  maxRate: number;
+  avgRate: number;
+}
+
 function rowToData(row: FrRow): FundingRateData {
   return {
     symbol: row.symbol,
@@ -180,4 +210,10 @@ function rowToData(row: FrRow): FundingRateData {
     fundingTime: new Date(row.timestamp).getTime(),
     markPrice: row.mark_price ?? undefined,
   };
+}
+
+function previousUtcDate(day: string): string {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }

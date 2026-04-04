@@ -3,7 +3,7 @@ import { getEvents } from './events.js';
 import { getSnapshots } from './snapshots.js';
 import { calcSharpeRatio, calcMaxDrawdown, round } from '../utils/math.js';
 import { EventType } from '../types.js';
-import type { DailyPnL } from '../types.js';
+import type { DailyPnL, LedgerEvent, PortfolioSnapshot } from '../types.js';
 import { createChildLogger } from '../utils/logger.js';
 
 const log = createChildLogger('pnl');
@@ -80,7 +80,103 @@ function rowToPnl(row: Record<string, unknown>): DailyPnL {
   };
 }
 
-export function calculateDailyPnl(date: string): DailyPnL {
+function createEmptyDailyPnl(date: string): DailyPnL {
+  return {
+    date,
+    startingNav: 0,
+    endingNav: 0,
+    dailyReturn: 0,
+    cumulativeReturn: 0,
+    realizedPnl: 0,
+    unrealizedPnl: 0,
+    lendingInterest: 0,
+    fundingReceived: 0,
+    fundingPaid: 0,
+    stakingAccrual: 0,
+    swapPnl: 0,
+    binanceTradingFee: 0,
+    binanceWithdrawFee: 0,
+    solanaGas: 0,
+    swapSlippage: 0,
+    lendingFee: 0,
+    totalFees: 0,
+    navHigh: 0,
+    navLow: 0,
+    maxDrawdown: 0,
+  };
+}
+
+function getSnapshotDates(from: string, to: string): string[] {
+  const rows = getDb().prepare(`
+    SELECT DISTINCT DATE(timestamp) as date
+    FROM snapshots
+    WHERE DATE(timestamp) >= DATE(@from) AND DATE(timestamp) <= DATE(@to)
+    ORDER BY DATE(timestamp) ASC
+  `).all({ from, to }) as { date: string }[];
+
+  return rows.map((row) => row.date);
+}
+
+function getWalletUsdcInternalFlow(events: LedgerEvent[]): number {
+  let netFlow = 0;
+
+  for (const event of events) {
+    const action = event.metadata?.['action'];
+    const amount = event.amount ?? 0;
+    if (typeof action !== 'string' || amount === 0) continue;
+
+    switch (action) {
+      case 'rebalance_withdraw':
+      case 'dn_entry_withdraw_lending':
+      case 'capital_rebalance_multiply_withdraw':
+      case 'multiply_market_switch_withdraw':
+      case 'soft_deleverage':
+      case 'risk_soft_deleverage':
+        netFlow += amount;
+        break;
+
+      case 'rebalance_deposit':
+      case 'dn_exit_deposit_lending':
+      case 'capital_rebalance_multiply_deposit':
+      case 'multiply_market_switch_deposit':
+      case 'dn_entry_transfer_margin_to_binance':
+        netFlow -= amount;
+        break;
+
+      case 'dn_entry_swap_usdc_dawnsol': {
+        const usdcSpent = event.metadata?.['usdcSpent'];
+        if (typeof usdcSpent === 'number') {
+          netFlow -= usdcSpent;
+        }
+        break;
+      }
+
+      case 'dn_exit_swap_sol_usdc':
+        netFlow += amount;
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  return round(netFlow, 6);
+}
+
+export function estimateExternalUsdcFlow(
+  snapshots: PortfolioSnapshot[],
+  events: LedgerEvent[],
+): number {
+  if (snapshots.length < 2) return 0;
+
+  const start = snapshots[0]!;
+  const end = snapshots[snapshots.length - 1]!;
+  const observedBufferDelta = round(end.bufferUsdcBalance - start.bufferUsdcBalance, 6);
+  const internalBufferDelta = getWalletUsdcInternalFlow(events);
+  return round(observedBufferDelta - internalBufferDelta, 6);
+}
+
+function calculateDailyPnlForDate(date: string): DailyPnL {
   const dayStart = `${date}T00:00:00.000Z`;
   const dayEnd = `${date}T23:59:59.999Z`;
 
@@ -103,6 +199,7 @@ export function calculateDailyPnl(date: string): DailyPnL {
 
   // Get events for the day
   const dayEvents = getEvents({ from: dayStart, to: dayEnd });
+  const netExternalFlow = estimateExternalUsdcFlow(daySnapshots, dayEvents);
 
   // Revenue aggregation
   let lendingInterest = 0;
@@ -186,36 +283,17 @@ export function calculateDailyPnl(date: string): DailyPnL {
     ? endSnapshot.binancePerpUnrealizedPnl
     : 0;
 
-  // Daily return
+  // Daily return excluding external wallet top-ups / withdrawals.
   const dailyReturn = startingNav > 0
-    ? round((endingNav - startingNav) / startingNav, 8)
+    ? round((endingNav - startingNav - netExternalFlow) / startingNav, 8)
     : 0;
-
-  // Cumulative return from the very first snapshot
-  const firstSnapshotRow = getDb().prepare(
-    'SELECT total_nav_usdc FROM snapshots ORDER BY timestamp ASC LIMIT 1'
-  ).get() as { total_nav_usdc: number } | undefined;
-
-  const initialNav = firstSnapshotRow?.total_nav_usdc ?? startingNav;
-  const cumulativeReturn = initialNav > 0
-    ? round((endingNav - initialNav) / initialNav, 8)
-    : 0;
-
-  // Max drawdown from all historical daily NAVs up to and including today
-  const allPnlRows = getDb().prepare(
-    'SELECT ending_nav FROM daily_pnl WHERE date <= @date ORDER BY date ASC'
-  ).all({ date }) as { ending_nav: number }[];
-
-  const navSeries = allPnlRows.map(r => r.ending_nav);
-  navSeries.push(endingNav); // include today
-  const maxDrawdown = calcMaxDrawdown(navSeries);
 
   const pnl: DailyPnL = {
     date,
     startingNav: round(startingNav, 4),
     endingNav: round(endingNav, 4),
     dailyReturn,
-    cumulativeReturn,
+    cumulativeReturn: 0,
     realizedPnl: round(realizedPnl, 4),
     unrealizedPnl: round(unrealizedPnl, 4),
     lendingInterest: round(lendingInterest, 4),
@@ -231,11 +309,44 @@ export function calculateDailyPnl(date: string): DailyPnL {
     totalFees: round(totalFees, 4),
     navHigh: round(navHigh, 4),
     navLow: round(navLow, 4),
-    maxDrawdown: round(maxDrawdown, 6),
+    maxDrawdown: 0,
   };
 
-  log.info({ date, dailyReturn: pnl.dailyReturn, endingNav: pnl.endingNav }, 'Daily PnL calculated');
+  log.info(
+    {
+      date,
+      dailyReturn: pnl.dailyReturn,
+      endingNav: pnl.endingNav,
+      netExternalFlow,
+    },
+    'Daily PnL calculated',
+  );
   return pnl;
+}
+
+function finalizePnlSeries(rows: DailyPnL[]): DailyPnL[] {
+  let cumulativeGrowth = 1;
+  const navSeries: number[] = [];
+
+  return rows.map((row) => {
+    cumulativeGrowth *= 1 + row.dailyReturn;
+    navSeries.push(row.endingNav);
+    return {
+      ...row,
+      cumulativeReturn: round(cumulativeGrowth - 1, 8),
+      maxDrawdown: round(calcMaxDrawdown(navSeries), 6),
+    };
+  });
+}
+
+export function calculateDailyPnl(date: string): DailyPnL {
+  const rows = getDailyPnlRange('0000-01-01', date);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i]!.date === date) {
+      return rows[i]!;
+    }
+  }
+  return createEmptyDailyPnl(date);
 }
 
 export function saveDailyPnl(pnl: DailyPnL): void {
@@ -245,8 +356,14 @@ export function saveDailyPnl(pnl: DailyPnL): void {
 }
 
 export function getDailyPnlRange(from: string, to: string): DailyPnL[] {
-  const rows = getRangeStmt().all({ from, to }) as Record<string, unknown>[];
-  return rows.map(rowToPnl);
+  const snapshotDates = getSnapshotDates(from, to);
+  if (snapshotDates.length === 0) {
+    const rows = getRangeStmt().all({ from, to }) as Record<string, unknown>[];
+    return rows.map(rowToPnl);
+  }
+
+  const computed = snapshotDates.map((date) => calculateDailyPnlForDate(date));
+  return finalizePnlSeries(computed);
 }
 
 export interface PerformanceSummary {
@@ -261,25 +378,7 @@ export interface PerformanceSummary {
 }
 
 export function getPerformanceSummary(): PerformanceSummary {
-  const allRows = allNoParams(getAllStmt()) as Record<string, unknown>[];
-  const allPnl = allRows.map(rowToPnl);
-
-  // Calculate today's live PnL from snapshots/events
-  const todayStr = new Date().toISOString().split('T')[0]!;
-  const lastSavedDate = allPnl.length > 0 ? allPnl[allPnl.length - 1]!.date : null;
-
-  // Only add today's live data if it hasn't been saved yet
-  if (lastSavedDate !== todayStr) {
-    try {
-      const todayPnl = calculateDailyPnl(todayStr);
-      // Only include if we have meaningful snapshot data
-      if (todayPnl.startingNav > 0 || todayPnl.endingNav > 0) {
-        allPnl.push(todayPnl);
-      }
-    } catch (err) {
-      log.warn({ error: (err as Error).message }, 'Failed to calculate live daily PnL');
-    }
-  }
+  const allPnl = getDailyPnlRange('0000-01-01', '9999-12-31');
 
   // Filter out days with no meaningful NAV data (e.g. bot started mid-day)
   const validPnl = allPnl.filter(p => p.startingNav > 0 && p.endingNav > 0);
@@ -300,9 +399,7 @@ export function getPerformanceSummary(): PerformanceSummary {
   const totalDays = validPnl.length;
   const dailyReturns = validPnl.map(p => p.dailyReturn);
 
-  const firstNav = validPnl[0]!.startingNav;
-  const lastNav = validPnl[validPnl.length - 1]!.endingNav;
-  const totalReturn = firstNav > 0 ? (lastNav - firstNav) / firstNav : 0;
+  const totalReturn = validPnl[validPnl.length - 1]!.cumulativeReturn;
 
   // Annualized return: (1 + totalReturn)^(365/days) - 1
   // Only annualize when we have >= 7 days of data to avoid misleading extrapolation
@@ -321,7 +418,7 @@ export function getPerformanceSummary(): PerformanceSummary {
   // Note: realizedPnl/totalFees use allPnl (not validPnl) since fee/revenue
   // events can occur on days without full NAV snapshots
 
-  const unrealizedPnl = lastNav - firstNav;
+  const unrealizedPnl = validPnl[validPnl.length - 1]!.unrealizedPnl;
 
   return {
     totalReturn: round(totalReturn, 6),

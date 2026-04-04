@@ -15,7 +15,12 @@ export function Header() {
   return (
     <header className="flex items-center justify-between mb-6">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-bold text-vault-accent">Dawn Vault Dashboard</h1>
+        <div>
+          <h1 className="text-xl font-bold text-vault-accent">Dawn Vault Dashboard</h1>
+          <p className="text-[11px] uppercase tracking-wider text-vault-muted">
+            Base-first mode: Multiply primary, Lending supplementary, DN conditional
+          </p>
+        </div>
       </div>
       <div className="flex items-center gap-3">
         <span className="flex items-center gap-1.5 text-xs text-vault-accent">

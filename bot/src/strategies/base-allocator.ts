@@ -76,32 +76,28 @@ export class BaseAllocator {
     return ranking;
   }
 
-  /**
-   * Calculate optimal allocation across protocols.
-   *
-   * When maxProtocolAllocationPct is set, distributes across protocols
-   * weighted by APY while respecting the per-protocol cap.
-   * When only 1 protocol is available, caps at maxProtocolAllocationPct
-   * and keeps the rest as wallet buffer.
-   *
-   * Falls back to single-protocol allocation when maxProtocolAllocationPct
-   * is not set (100%).
-   */
-  calculateOptimalAllocation(
-    totalUsdc: number,
+  private getRankingWithFallback(
+    apyRanking: { protocol: string; apy: number }[],
+  ): { protocol: string; apy: number }[] {
+    if (apyRanking.length > 0) {
+      return apyRanking;
+    }
+    return Array.from(this.protocols.keys()).map((protocol) => ({ protocol, apy: 0 }));
+  }
+
+  private calculateAllocationForDeployable(
+    deployable: number,
     currentAllocations: Map<string, number>,
     apyRanking: { protocol: string; apy: number }[],
   ): AllocationResult[] {
-    if (apyRanking.length === 0) {
+    const ranking = this.getRankingWithFallback(apyRanking);
+    if (ranking.length === 0) {
       return [];
     }
 
-    const bufferAmount = round(totalUsdc * (this.config.lending.bufferPct / 100), 6);
-    const deployable = round(Math.max(totalUsdc - bufferAmount, 0), 6);
     const maxAllocPct = this.config.lending.maxProtocolAllocationPct ?? 100;
     const maxPerProtocol = round(deployable * (maxAllocPct / 100), 6);
 
-    // Find which protocol currently holds the most
     let currentWinner = '';
     let currentWinnerBalance = 0;
     for (const [name, balance] of currentAllocations) {
@@ -111,25 +107,20 @@ export class BaseAllocator {
       }
     }
 
-    // Determine target protocol order: highest APY, but only switch if diff is large enough
-    const bestProtocol = apyRanking[0]!.protocol;
-    const bestApy = apyRanking[0]!.apy;
+    const bestProtocol = ranking[0]!.protocol;
+    const bestApy = ranking[0]!.apy;
     const currentWinnerApy =
-      apyRanking.find((r) => r.protocol === currentWinner)?.apy ?? 0;
+      ranking.find((r) => r.protocol === currentWinner)?.apy ?? 0;
 
     const minDiffBps = this.config.thresholds.lendingRebalanceMinDiffBps;
-    const apyDiffBps = (bestApy - currentWinnerApy) * 10_000; // convert to bps
-
-    // Determine primary target protocol (gets allocated first)
+    const apyDiffBps = (bestApy - currentWinnerApy) * 10_000;
     const primaryProtocol =
       currentWinner && apyDiffBps < minDiffBps ? currentWinner : bestProtocol;
 
-    // Calculate target balances with per-protocol cap
     const targetBalances = new Map<string, number>();
     let remaining = deployable;
 
-    // Sort by APY but put primary protocol first
-    const sortedProtocols = [...apyRanking].sort((a, b) => {
+    const sortedProtocols = [...ranking].sort((a, b) => {
       if (a.protocol === primaryProtocol) return -1;
       if (b.protocol === primaryProtocol) return 1;
       return b.apy - a.apy;
@@ -153,15 +144,18 @@ export class BaseAllocator {
         primaryProtocol,
         maxAllocPct,
         deployable,
-        bufferAmount,
         targetBalances: Object.fromEntries(targetBalances),
       },
-      'Allocation calculation',
+      'Lending allocation calculation',
     );
 
+    const protocols = new Set([
+      ...Array.from(this.protocols.keys()),
+      ...Array.from(currentAllocations.keys()),
+    ]);
     const results: AllocationResult[] = [];
 
-    for (const { protocol } of apyRanking) {
+    for (const protocol of protocols) {
       const currentBalance = currentAllocations.get(protocol) ?? 0;
       const targetBalance = targetBalances.get(protocol) ?? 0;
       const diff = round(targetBalance - currentBalance, 6);
@@ -184,13 +178,176 @@ export class BaseAllocator {
   }
 
   /**
+   * Calculate optimal allocation across protocols using wallet + deployed capital.
+   */
+  calculateOptimalAllocation(
+    totalUsdc: number,
+    currentAllocations: Map<string, number>,
+    apyRanking: { protocol: string; apy: number }[],
+  ): AllocationResult[] {
+    const bufferAmount = round(totalUsdc * (this.config.lending.bufferPct / 100), 6);
+    const deployable = round(Math.max(totalUsdc - bufferAmount, 0), 6);
+    const results = this.calculateAllocationForDeployable(
+      deployable,
+      currentAllocations,
+      apyRanking,
+    );
+
+    log.info(
+      {
+        totalUsdc,
+        bufferAmount,
+        deployable,
+      },
+      'Lending rebalance budget',
+    );
+
+    return results;
+  }
+
+  async planRebalanceToTargetTotal(
+    targetDeployedUsdc: number,
+  ): Promise<AllocationResult[]> {
+    const [currentAllocations, apyRanking] = await Promise.all([
+      this.getCurrentAllocations(),
+      this.getApyRanking(),
+    ]);
+
+    return this.calculateAllocationForDeployable(
+      round(Math.max(targetDeployedUsdc, 0), 6),
+      currentAllocations,
+      apyRanking,
+    );
+  }
+
+  async executePlan(
+    allocations: AllocationResult[],
+    phases: Array<'withdraw' | 'deposit'> = ['withdraw', 'deposit'],
+  ): Promise<{ txSigs: string[]; events: LedgerEvent[] }> {
+    const txSigs: string[] = [];
+    const events: LedgerEvent[] = [];
+
+    const executeWithdrawals = phases.includes('withdraw');
+    const executeDeposits = phases.includes('deposit');
+
+    if (executeWithdrawals) {
+      const withdrawals = allocations.filter((a) => a.action === 'withdraw');
+      for (const alloc of withdrawals) {
+        const protocol = this.protocols.get(alloc.protocol);
+        if (!protocol) continue;
+
+        try {
+          log.info(
+            { protocol: alloc.protocol, amount: alloc.amount },
+            'Withdrawing from protocol',
+          );
+          const txSig = await protocol.withdraw(alloc.amount);
+          txSigs.push(txSig);
+
+          const feeSol = this.rpcUrl ? await getTxFeeInSol(this.rpcUrl, txSig) : 0;
+
+          events.push({
+            timestamp: new Date().toISOString(),
+            eventType: EventType.WITHDRAW,
+            amount: alloc.amount,
+            asset: 'USDC',
+            txHash: txSig,
+            fee: feeSol,
+            feeAsset: 'SOL',
+            sourceProtocol: alloc.protocol,
+            metadata: {
+              action: 'rebalance_withdraw',
+              previousBalance: alloc.currentBalance,
+            },
+          });
+
+          log.info(
+            { protocol: alloc.protocol, amount: alloc.amount, txSig },
+            'Withdrawal complete',
+          );
+        } catch (err) {
+          log.error(
+            { protocol: alloc.protocol, amount: alloc.amount, error: err },
+            'Withdrawal failed',
+          );
+          events.push({
+            timestamp: new Date().toISOString(),
+            eventType: EventType.ALERT,
+            amount: alloc.amount,
+            asset: 'USDC',
+            sourceProtocol: alloc.protocol,
+            metadata: {
+              action: 'rebalance_withdraw_failed',
+              error: String(err),
+            },
+          });
+        }
+      }
+    }
+
+    if (executeDeposits) {
+      const deposits = allocations.filter((a) => a.action === 'deposit');
+      for (const alloc of deposits) {
+        const protocol = this.protocols.get(alloc.protocol);
+        if (!protocol) continue;
+
+        try {
+          log.info(
+            { protocol: alloc.protocol, amount: alloc.amount },
+            'Depositing to protocol',
+          );
+          const txSig = await protocol.deposit(alloc.amount);
+          txSigs.push(txSig);
+
+          const feeSol = this.rpcUrl ? await getTxFeeInSol(this.rpcUrl, txSig) : 0;
+
+          events.push({
+            timestamp: new Date().toISOString(),
+            eventType: EventType.DEPOSIT,
+            amount: alloc.amount,
+            asset: 'USDC',
+            txHash: txSig,
+            fee: feeSol,
+            feeAsset: 'SOL',
+            sourceProtocol: alloc.protocol,
+            metadata: {
+              action: 'rebalance_deposit',
+              previousBalance: alloc.currentBalance,
+            },
+          });
+
+          log.info(
+            { protocol: alloc.protocol, amount: alloc.amount, txSig },
+            'Deposit complete',
+          );
+        } catch (err) {
+          log.error(
+            { protocol: alloc.protocol, amount: alloc.amount, error: err },
+            'Deposit failed',
+          );
+          events.push({
+            timestamp: new Date().toISOString(),
+            eventType: EventType.ALERT,
+            amount: alloc.amount,
+            asset: 'USDC',
+            sourceProtocol: alloc.protocol,
+            metadata: {
+              action: 'rebalance_deposit_failed',
+              error: String(err),
+            },
+          });
+        }
+      }
+    }
+
+    return { txSigs, events };
+  }
+
+  /**
    * Execute rebalance: withdraw from over-allocated protocols, then deposit
    * into the target protocol. Returns transaction signatures and ledger events.
    */
   async rebalance(walletUsdcBalance = 0): Promise<{ txSigs: string[]; events: LedgerEvent[] }> {
-    const txSigs: string[] = [];
-    const events: LedgerEvent[] = [];
-
     const [currentAllocations, apyRanking] = await Promise.all([
       this.getCurrentAllocations(),
       this.getApyRanking(),
@@ -214,119 +371,11 @@ export class BaseAllocator {
     const actionNeeded = allocations.some((a) => a.action !== 'none');
     if (!actionNeeded) {
       log.info('No rebalancing needed');
-      return { txSigs, events };
+      return { txSigs: [], events: [] };
     }
 
     log.info({ allocations }, 'Starting rebalance');
-
-    // Phase 1: Execute all withdrawals first
-    const withdrawals = allocations.filter((a) => a.action === 'withdraw');
-    for (const alloc of withdrawals) {
-      const protocol = this.protocols.get(alloc.protocol);
-      if (!protocol) continue;
-
-      try {
-        log.info(
-          { protocol: alloc.protocol, amount: alloc.amount },
-          'Withdrawing from protocol',
-        );
-        const txSig = await protocol.withdraw(alloc.amount);
-        txSigs.push(txSig);
-
-        // Fetch tx fee asynchronously
-        const feeSol = this.rpcUrl ? await getTxFeeInSol(this.rpcUrl, txSig) : 0;
-
-        events.push({
-          timestamp: new Date().toISOString(),
-          eventType: EventType.WITHDRAW,
-          amount: alloc.amount,
-          asset: 'USDC',
-          txHash: txSig,
-          fee: feeSol,
-          feeAsset: 'SOL',
-          sourceProtocol: alloc.protocol,
-          metadata: {
-            action: 'rebalance_withdraw',
-            previousBalance: alloc.currentBalance,
-          },
-        });
-
-        log.info(
-          { protocol: alloc.protocol, amount: alloc.amount, txSig },
-          'Withdrawal complete',
-        );
-      } catch (err) {
-        log.error(
-          { protocol: alloc.protocol, amount: alloc.amount, error: err },
-          'Withdrawal failed',
-        );
-        events.push({
-          timestamp: new Date().toISOString(),
-          eventType: EventType.ALERT,
-          amount: alloc.amount,
-          asset: 'USDC',
-          sourceProtocol: alloc.protocol,
-          metadata: {
-            action: 'rebalance_withdraw_failed',
-            error: String(err),
-          },
-        });
-      }
-    }
-
-    // Phase 2: Execute all deposits
-    const deposits = allocations.filter((a) => a.action === 'deposit');
-    for (const alloc of deposits) {
-      const protocol = this.protocols.get(alloc.protocol);
-      if (!protocol) continue;
-
-      try {
-        log.info(
-          { protocol: alloc.protocol, amount: alloc.amount },
-          'Depositing to protocol',
-        );
-        const txSig = await protocol.deposit(alloc.amount);
-        txSigs.push(txSig);
-
-        const feeSol = this.rpcUrl ? await getTxFeeInSol(this.rpcUrl, txSig) : 0;
-
-        events.push({
-          timestamp: new Date().toISOString(),
-          eventType: EventType.DEPOSIT,
-          amount: alloc.amount,
-          asset: 'USDC',
-          txHash: txSig,
-          fee: feeSol,
-          feeAsset: 'SOL',
-          sourceProtocol: alloc.protocol,
-          metadata: {
-            action: 'rebalance_deposit',
-            previousBalance: alloc.currentBalance,
-          },
-        });
-
-        log.info(
-          { protocol: alloc.protocol, amount: alloc.amount, txSig },
-          'Deposit complete',
-        );
-      } catch (err) {
-        log.error(
-          { protocol: alloc.protocol, amount: alloc.amount, error: err },
-          'Deposit failed',
-        );
-        events.push({
-          timestamp: new Date().toISOString(),
-          eventType: EventType.ALERT,
-          amount: alloc.amount,
-          asset: 'USDC',
-          sourceProtocol: alloc.protocol,
-          metadata: {
-            action: 'rebalance_deposit_failed',
-            error: String(err),
-          },
-        });
-      }
-    }
+    const { txSigs, events } = await this.executePlan(allocations);
 
     log.info(
       { txCount: txSigs.length, eventCount: events.length },

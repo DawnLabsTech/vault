@@ -111,6 +111,10 @@
     "minDiffBps": 100,
     "minHoldingDays": 3,
     "scanIntervalMs": 21600000,
+    "paybackWindowDays": 7,
+    "estimatedSwitchCostBps": 20,
+    "estimatedSwitchCostUsd": 1,
+    "minNetGainUsd": 0,
     "riskPenalty": [0, 0.005, 0.015],
     "defaultTargetHealthRate": 1.15,
     "defaultAlertHealthRate": 1.10,
@@ -127,8 +131,8 @@
     "maxSlippageBps": 100,
     "criticalUtilization": 0.90,
     "tvlSafeThreshold": 10000000,
-    "rejectThreshold": 90,
-    "emergencyThreshold": 85,
+    "rejectThreshold": 75,
+    "emergencyThreshold": 90,
     "emaSmoothingAlpha": 0.3
   }
 }

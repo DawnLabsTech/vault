@@ -5,6 +5,7 @@ import { configManager, getConfig } from './config.js';
 import { initDb, closeDb, getDb } from './measurement/db.js';
 import { FrMonitor } from './core/fr-monitor.js';
 import { BaseAllocator } from './strategies/base-allocator.js';
+import { CapitalAllocator } from './strategies/capital-allocator.js';
 import { DnExecutor } from './strategies/dn-executor.js';
 import { RiskManager } from './risk/risk-manager.js';
 import { BinanceRestClient } from './connectors/binance/rest.js';
@@ -186,6 +187,10 @@ async function main(): Promise<void> {
         minDiffBps: 100,
         minHoldingDays: 3,
         scanIntervalMs: 21_600_000,
+        paybackWindowDays: 7,
+        estimatedSwitchCostBps: 20,
+        estimatedSwitchCostUsd: 1,
+        minNetGainUsd: 0,
         riskPenalty: [0, 0.005, 0.015] as [number, number, number],
         defaultTargetHealthRate: 1.15,
         defaultAlertHealthRate: 1.10,
@@ -214,12 +219,21 @@ async function main(): Promise<void> {
     }
   }
 
+  const capitalAllocator = new CapitalAllocator(
+    baseAllocator,
+    kaminoMultiplyAdapters,
+    config,
+    marketScanner,
+    rpcUrl,
+  );
+
   // Create orchestrator
   const orchestrator = new Orchestrator({
     binanceRest,
     binanceWs,
     frMonitor,
     baseAllocator,
+    capitalAllocator,
     dnExecutor,
     riskManager,
     solanaRpc,

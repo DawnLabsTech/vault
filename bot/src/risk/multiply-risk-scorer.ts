@@ -956,4 +956,8 @@ export class MultiplyRiskScorer {
   getRejectThreshold(): number {
     return this.config.rejectThreshold;
   }
+
+  getEmergencyThreshold(): number {
+    return this.config.emergencyThreshold;
+  }
 }

@@ -40,6 +40,18 @@ function insertDayFr(date: string, rates: [number, number, number]) {
   }
 }
 
+function insertPartialDayFr(date: string, rates: number[]) {
+  for (let i = 0; i < rates.length; i++) {
+    const hour = String(i * 8).padStart(2, '0');
+    monitor.recordFundingRate({
+      symbol: 'SOLUSDT',
+      fundingRate: rates[i]!,
+      fundingTime: new Date(`${date}T${hour}:00:00Z`).getTime(),
+      markPrice: 150,
+    });
+  }
+}
+
 // ── recordFundingRate ────────────────────────────────────
 
 describe('recordFundingRate', () => {
@@ -136,6 +148,16 @@ describe('getAverageAnnualized', () => {
     const avg = monitor.getAverageAnnualized(2);
     expect(avg).toBeCloseTo(frToAnnualized(0.001), 2);
   });
+
+  it('ignores the most recent partial day when averaging', () => {
+    insertDayFr('2026-01-01', [0.0001, 0.0001, 0.0001]);
+    insertDayFr('2026-01-02', [0.0002, 0.0002, 0.0002]);
+    insertPartialDayFr('2026-01-03', [0.0010]);
+
+    const avg = monitor.getAverageAnnualized(2);
+    const expectedAvgFr = (0.0001 + 0.0002) / 2;
+    expect(avg).toBeCloseTo(frToAnnualized(expectedAvgFr), 2);
+  });
 });
 
 // ── getDaysAboveThreshold ────────────────────────────────
@@ -171,6 +193,22 @@ describe('getDaysAboveThreshold', () => {
 
     expect(monitor.getDaysAboveThreshold(10)).toBe(0);
   });
+
+  it('ignores the newest partial day until all 3 samples arrive', () => {
+    insertDayFr('2026-01-01', [0.0001, 0.0001, 0.0001]);
+    insertDayFr('2026-01-02', [0.0001, 0.0001, 0.0001]);
+    insertPartialDayFr('2026-01-03', [0.0001, 0.0001]);
+
+    expect(monitor.getDaysAboveThreshold(10)).toBe(2);
+  });
+
+  it('breaks the streak when an older day is incomplete', () => {
+    insertDayFr('2026-01-01', [0.0001, 0.0001, 0.0001]);
+    insertPartialDayFr('2026-01-02', [0.0001, 0.0001]);
+    insertDayFr('2026-01-03', [0.0001, 0.0001, 0.0001]);
+
+    expect(monitor.getDaysAboveThreshold(10)).toBe(1);
+  });
 });
 
 // ── getDaysBelowThreshold ────────────────────────────────
@@ -195,6 +233,14 @@ describe('getDaysBelowThreshold', () => {
 
     // Most recent (Jan 3) below, Jan 2 breaks → count = 1
     expect(monitor.getDaysBelowThreshold(0)).toBe(1);
+  });
+
+  it('ignores the newest partial day for below-threshold streaks', () => {
+    insertDayFr('2026-01-01', [-0.0001, -0.0001, -0.0001]);
+    insertDayFr('2026-01-02', [-0.0001, -0.0001, -0.0001]);
+    insertPartialDayFr('2026-01-03', [-0.0001]);
+
+    expect(monitor.getDaysBelowThreshold(0)).toBe(2);
   });
 });
 

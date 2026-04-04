@@ -276,7 +276,7 @@ export interface RiskAssessment {
   compositeScore: number; // 0-100
   dimensions: RiskDimensionScores;
   details: RiskDimensionDetails;
-  /** Derived APY penalty (decimal, e.g. 0.005 = 0.5%) */
+  /** Legacy field retained for API compatibility; Multiply risk no longer adjusts APY. */
   riskPenalty: number;
   /** Derived target health rate */
   targetHealthRate: number;
@@ -301,9 +301,9 @@ export interface RiskScorerConfig {
   criticalUtilization: number;
   /** TVL in USD below which risk increases linearly (default 10_000_000) */
   tvlSafeThreshold: number;
-  /** Composite score above which candidate is rejected (default 90) */
+  /** Composite score above which new allocation / switch targets are rejected (default 75) */
   rejectThreshold: number;
-  /** Composite score above which emergency deleverage triggers (default 85) */
+  /** Composite score above which emergency deleverage / full exit triggers (default 90) */
   emergencyThreshold: number;
   /** EMA smoothing alpha (default 0.3) */
   emaSmoothingAlpha: number;
@@ -334,13 +334,21 @@ export interface MultiplyCandidate {
 }
 
 export interface MultiplyRebalanceConfig {
-  /** Minimum APY difference (bps) to trigger switch (default 100) */
+  /** Legacy APY-diff threshold retained for zero-balance adapter preselection (default 100) */
   minDiffBps: number;
   /** Minimum days to hold before switching (default 3) */
   minHoldingDays: number;
   /** Scan interval in ms (default 21600000 = 6h) */
   scanIntervalMs: number;
-  /** @deprecated Use RiskScorer for dynamic risk penalty */
+  /** Days over which a switch must earn back its cost (defaults to minHoldingDays) */
+  paybackWindowDays?: number;
+  /** Estimated all-in proportional switch cost in bps of switched notional */
+  estimatedSwitchCostBps?: number;
+  /** Estimated fixed switch cost in USD (tx fees, idle capital, safety margin) */
+  estimatedSwitchCostUsd?: number;
+  /** Minimum net expected gain in USD required after deducting switch cost */
+  minNetGainUsd?: number;
+  /** @deprecated Legacy field retained for backward compatibility; unused. */
   riskPenalty?: [number, number, number];
   /** Default target health rate for candidates (default 1.15) */
   defaultTargetHealthRate: number;
