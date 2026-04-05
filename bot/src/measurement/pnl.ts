@@ -163,17 +163,41 @@ function getWalletUsdcInternalFlow(events: LedgerEvent[]): number {
   return round(netFlow, 6);
 }
 
+/**
+ * Detect external deposits/withdrawals by looking for large NAV jumps between
+ * consecutive snapshots. Organic market moves are small (< a few %) per
+ * snapshot interval (~5 min), so any jump exceeding the threshold is classified
+ * as an external cash flow.
+ *
+ * This replaces the previous buffer-delta + event-based approach, which was
+ * brittle when compound operations (swap → deposit → leverage) partially
+ * failed — the event was logged as "_failed" even though USDC already left
+ * the buffer, causing the flow estimate to be wildly off.
+ */
 export function estimateExternalUsdcFlow(
   snapshots: PortfolioSnapshot[],
-  events: LedgerEvent[],
+  _events: LedgerEvent[],
 ): number {
   if (snapshots.length < 2) return 0;
 
-  const start = snapshots[0]!;
-  const end = snapshots[snapshots.length - 1]!;
-  const observedBufferDelta = round(end.bufferUsdcBalance - start.bufferUsdcBalance, 6);
-  const internalBufferDelta = getWalletUsdcInternalFlow(events);
-  return round(observedBufferDelta - internalBufferDelta, 6);
+  // Absolute NAV change threshold per snapshot interval to classify as
+  // external flow. Organic moves between 5-min snapshots are typically
+  // < $1 for a sub-$10k portfolio.
+  const JUMP_THRESHOLD_USD = 5;
+
+  let totalExternalFlow = 0;
+  for (let i = 1; i < snapshots.length; i++) {
+    const prev = snapshots[i - 1]!;
+    const curr = snapshots[i]!;
+    if (prev.totalNavUsdc <= 0) continue;
+
+    const delta = curr.totalNavUsdc - prev.totalNavUsdc;
+    if (Math.abs(delta) > JUMP_THRESHOLD_USD) {
+      totalExternalFlow += delta;
+    }
+  }
+
+  return round(totalExternalFlow, 6);
 }
 
 function calculateDailyPnlForDate(date: string): DailyPnL {
