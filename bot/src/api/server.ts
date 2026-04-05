@@ -10,6 +10,8 @@ import type { BaseAllocator } from '../strategies/base-allocator.js';
 import type { KaminoMultiplyLending } from '../connectors/defi/kamino-multiply.js';
 import type { MarketScanner } from '../core/market-scanner.js';
 import type { PerpExchange } from '../types.js';
+import type { AdvisorStore } from '../advisor/store.js';
+import type { ChatService } from '../chat/chat-service.js';
 
 const log = createChildLogger('api');
 
@@ -22,6 +24,8 @@ export class ApiServer {
   private multiplyAdapters: KaminoMultiplyLending[] = [];
   private marketScanner: MarketScanner | null = null;
   private perpExchange: PerpExchange = 'binance';
+  private advisorStore: AdvisorStore | null = null;
+  private chatService: ChatService | null = null;
 
   setFrMonitor(monitor: FrMonitor): void {
     this.frMonitor = monitor;
@@ -43,6 +47,14 @@ export class ApiServer {
     this.perpExchange = exchange;
   }
 
+  setAdvisorStore(store: AdvisorStore | null): void {
+    this.advisorStore = store;
+  }
+
+  setChatService(service: ChatService | null): void {
+    this.chatService = service;
+  }
+
   start(port: number = 3000): void {
     this.server = createServer(async (req, res) => {
       // Health check — no auth required (used by Docker healthcheck)
@@ -55,6 +67,7 @@ export class ApiServer {
 
       // Auth check — require token in production
       const authHeader = req.headers.authorization;
+      const queryToken = healthUrl.searchParams.get('token');
       const expectedAuth = process.env.API_AUTH_TOKEN;
       if (!expectedAuth && process.env.NODE_ENV === 'production') {
         log.error('API_AUTH_TOKEN not set in production — rejecting all requests');
@@ -62,7 +75,7 @@ export class ApiServer {
         res.end(JSON.stringify({ error: 'Server misconfigured' }));
         return;
       }
-      if (expectedAuth && authHeader !== `Bearer ${expectedAuth}`) {
+      if (expectedAuth && authHeader !== `Bearer ${expectedAuth}` && queryToken !== expectedAuth) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
         return;
@@ -70,8 +83,8 @@ export class ApiServer {
 
       // CORS headers
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -80,6 +93,13 @@ export class ApiServer {
       }
 
       try {
+        // POST /api/chat — SSE streaming, handle separately
+        const reqUrl = new URL(req.url || '/', `http://${req.headers.host}`);
+        if (req.method === 'POST' && reqUrl.pathname === '/api/chat') {
+          await this.handleChat(req, res);
+          return;
+        }
+
         await this.handleRequest(req, res);
       } catch (err) {
         log.error({ error: (err as Error).message, url: req.url }, 'API error');
@@ -177,6 +197,22 @@ export class ApiServer {
       case '/api/multiply': {
         const multiplyData = await this.getMultiplyData();
         this.sendJson(res, multiplyData);
+        break;
+      }
+
+      case '/api/advisor': {
+        const limit = parseInt(url.searchParams.get('limit') || '50');
+        const category = url.searchParams.get('category') || undefined;
+        if (!this.advisorStore) {
+          this.sendJson(res, { recommendations: [], stats: null, enabled: false });
+          break;
+        }
+        const recommendations = category
+          ? this.advisorStore.getByCategory(category, limit)
+          : this.advisorStore.getRecent(limit);
+        const weekAgo = Date.now() - 7 * 86_400_000;
+        const stats = this.advisorStore.getAccuracyStats(weekAgo);
+        this.sendJson(res, { recommendations, stats, enabled: true });
         break;
       }
 
@@ -391,6 +427,60 @@ export class ApiServer {
     }
   }
 
+  private async handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.chatService) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Chat service not available' }));
+      return;
+    }
+
+    // Read POST body
+    const body = await new Promise<string>((resolve, reject) => {
+      let data = '';
+      req.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+      req.on('end', () => resolve(data));
+      req.on('error', reject);
+    });
+
+    let parsed: { message?: string; sessionId?: string };
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid JSON' }));
+      return;
+    }
+
+    const message = parsed.message;
+    if (!message || typeof message !== 'string') {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing message field' }));
+      return;
+    }
+
+    const sessionId = parsed.sessionId || 'default';
+
+    // SSE headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+
+    try {
+      for await (const chunk of this.chatService.streamChat(message, sessionId)) {
+        res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
+      }
+      res.write('data: [DONE]\n\n');
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'Chat SSE error');
+      res.write(`data: ${JSON.stringify({ error: 'Stream error' })}\n\n`);
+    } finally {
+      res.end();
+    }
+  }
+
   private sendJson(res: ServerResponse, data: unknown): void {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(data, null, 2));
@@ -454,6 +544,11 @@ export class ApiServer {
     </table>
   </div>
 
+  <h2>AI Advisor</h2>
+  <div class="card">
+    <div id="advisor-content">Loading...</div>
+  </div>
+
   <h2>Recent Events</h2>
   <div class="card">
     <table id="events-table">
@@ -475,11 +570,12 @@ export class ApiServer {
 
     async function refresh() {
       try {
-        const [status, perf, pnl, events] = await Promise.all([
+        const [status, perf, pnl, events, advisor] = await Promise.all([
           fetchJson('/api/status'),
           fetchJson('/api/performance'),
           fetchJson('/api/pnl?from=' + new Date(Date.now() - 30*86400000).toISOString().split('T')[0]),
           fetchJson('/api/events?limit=20'),
+          fetchJson('/api/advisor?limit=10'),
         ]);
 
         // Status
@@ -520,6 +616,26 @@ export class ApiServer {
           '<td>' + (e.asset||'') + '</td><td>' + fmt(e.amount,4) + '</td><td>' + (e.sourceProtocol||'') + '</td></tr>'
         ).join('');
         document.getElementById('events-body').innerHTML = evBody || '<tr><td colspan="5" style="color:#555">No events</td></tr>';
+
+        // Advisor
+        const recs = advisor?.recommendations || [];
+        if (!advisor?.enabled) {
+          document.getElementById('advisor-content').innerHTML = '<div style="color:#555;padding:12px">AI Advisor disabled</div>';
+        } else if (recs.length === 0) {
+          document.getElementById('advisor-content').innerHTML = '<div style="color:#555;padding:12px">No recommendations yet</div>';
+        } else {
+          const advisorHtml = recs.map(function(r) {
+            var icon = r.override ? '\\u{1F534}' : '\\u{1F7E2}';
+            var urgIcon = r.urgency === 'immediate' ? '\\u26A1' : r.urgency === 'next_cycle' ? '\\u23F0' : '';
+            return '<div style="padding:8px;margin:4px 0;border-left:3px solid ' + (r.override ? '#ff4444' : '#333') + ';background:#111">' +
+              '<div style="font-size:11px;color:#888">' + new Date(r.timestamp).toLocaleString() + ' ' + urgIcon + ' <b style="color:' + (r.override ? '#ff4444' : '#00ff88') + '">' + r.category + '</b> [' + r.confidence + ']</div>' +
+              '<div style="font-size:13px;color:#fff;margin:4px 0">' + r.action + '</div>' +
+              '<div style="font-size:11px;color:#888">' + r.reasoning + '</div>' +
+              (r.override ? '<div style="font-size:11px;color:#ff4444;margin-top:4px">Rule: ' + r.currentRule + '</div>' : '') +
+              '</div>';
+          }).join('');
+          document.getElementById('advisor-content').innerHTML = advisorHtml;
+        }
 
       } catch (err) {
         console.error('Refresh error:', err);

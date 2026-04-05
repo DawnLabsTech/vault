@@ -1,7 +1,7 @@
 import { DataStore } from './data/data-store.js';
 import { fetchFundingRates } from './data/fetch-funding-rates.js';
 import { fetchSolPrices } from './data/fetch-sol-prices.js';
-import { runSimulation } from './engine/simulator.js';
+import { runBacktest } from './runner.js';
 import { formatOutput } from './report/formatter.js';
 import type { BacktestConfig } from './types.js';
 
@@ -17,8 +17,10 @@ function parseArgs(args: string[]): BacktestConfig {
     startDate: get('--start', '2021-01-01'),
     endDate: get('--end', '2026-03-01'),
     initialCapital: Number(get('--capital', '10000')),
+    multiplyApy: Number(get('--multiply-apy', '13')),
+    multiplyCapacity: Number(get('--multiply-cap', 'Infinity')),
     lendingApy: Number(get('--lending-apy', '5')),
-    dawnsolApy: Number(get('--dawnsol-apy', '7')),
+    dawnsolApy: Number(get('--dawnsol-apy', '6.8')),
     frEntryAnnualized: Number(get('--entry-fr', '10')),
     frExitAnnualized: Number(get('--exit-fr', '0')),
     frEmergencyAnnualized: Number(get('--emergency-fr', '-10')),
@@ -37,8 +39,10 @@ Options:
   --start          Start date (default: 2021-01-01)
   --end            End date (default: 2026-03-01)
   --capital        Initial capital USDC (default: 10000)
+  --multiply-apy   Fixed Multiply APY % (default: 13)
+  --multiply-cap   Max USDC in Multiply (default: unlimited)
   --lending-apy    Fixed lending APY % (default: 5)
-  --dawnsol-apy    Fixed dawnSOL APY % (default: 7)
+  --dawnsol-apy    Fixed dawnSOL APY % (default: 6.8)
   --entry-fr       FR entry threshold % (default: 10)
   --exit-fr        FR exit threshold % (default: 0)
   --emergency-fr   Emergency exit threshold % (default: -10)
@@ -59,45 +63,29 @@ async function main(): Promise<void> {
   }
 
   const config = parseArgs(args);
-  const store = new DataStore();
 
-  try {
-    // Step 1: Fetch data
-    console.log('Fetching funding rate data...');
-    const frCount = await fetchFundingRates(store, 'SOLUSDT', config.startDate, config.endDate);
-    console.log(`  Total FR records fetched: ${frCount}`);
+  // Handle fetch-only mode (needs direct DataStore access)
+  if (config.fetchOnly) {
+    const store = new DataStore();
+    try {
+      console.log('Fetching funding rate data...');
+      const frCount = await fetchFundingRates(store, 'SOLUSDT', config.startDate, config.endDate);
+      console.log(`  Total FR records fetched: ${frCount}`);
 
-    console.log('Fetching SOL price data...');
-    const priceCount = await fetchSolPrices(store, 'SOLUSDT', config.startDate, config.endDate);
-    console.log(`  Total price records fetched: ${priceCount}`);
+      console.log('Fetching SOL price data...');
+      const priceCount = await fetchSolPrices(store, 'SOLUSDT', config.startDate, config.endDate);
+      console.log(`  Total price records fetched: ${priceCount}`);
 
-    if (config.fetchOnly) {
       console.log('\nData fetch complete (--fetch-only mode).');
-      return;
+    } finally {
+      store.close();
     }
-
-    // Step 2: Load data for simulation
-    const startMs = new Date(config.startDate).getTime();
-    const endMs = new Date(config.endDate).getTime();
-
-    const frTicks = store.getFundingRates('SOLUSDT', startMs, endMs);
-    const priceTicks = store.getSolPrices(startMs, endMs);
-
-    console.log(`\nRunning simulation with ${frTicks.length} FR ticks and ${priceTicks.length} price ticks...`);
-
-    if (frTicks.length === 0 || priceTicks.length === 0) {
-      console.error('Error: No data available for the specified period.');
-      process.exit(1);
-    }
-
-    // Step 3: Run simulation
-    const result = runSimulation(frTicks, priceTicks, config);
-
-    // Step 4: Output results
-    formatOutput(result, config.output);
-  } finally {
-    store.close();
+    return;
   }
+
+  console.log('Running backtest...');
+  const result = await runBacktest(config);
+  formatOutput(result, config.output);
 }
 
 main().catch(err => {

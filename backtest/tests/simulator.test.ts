@@ -16,6 +16,8 @@ const defaultConfig: BacktestConfig = {
   startDate: '2024-01-01',
   endDate: '2024-01-10',
   initialCapital: 10000,
+  multiplyApy: 16,
+  multiplyCapacity: Infinity,
   lendingApy: 5,
   dawnsolApy: 7,
   frEntryAnnualized: 10,
@@ -91,7 +93,29 @@ describe('Simulator', () => {
     expect(result.totalEntries).toBe(0);
     expect(result.totalExits).toBe(0);
     expect(result.daysInBaseDn).toBe(0);
-    // Should still earn lending interest
+    // With unlimited Multiply capacity, all capital goes to Multiply
+    expect(result.totalMultiplyYield).toBeGreaterThan(0);
+    // Lending interest should be 0 (no overflow)
+    expect(result.totalLendingInterest).toBe(0);
+  });
+
+  it('earns both Multiply and Lending yield with capacity limit', () => {
+    const msPerTick = 8 * 60 * 60 * 1000;
+    const baseTime = Date.UTC(2024, 0, 1);
+    const ticks = 30;
+
+    const frTicks: FrTick[] = [];
+    const priceTicks: SolPriceTick[] = [];
+
+    for (let i = 0; i < ticks; i++) {
+      const time = baseTime + i * msPerTick;
+      frTicks.push(makeFrTick(time, 0.0000456, 100));
+      priceTicks.push(makePriceTick(time, 100));
+    }
+
+    const config = { ...defaultConfig, multiplyCapacity: 5000 };
+    const result = runSimulation(frTicks, priceTicks, config);
+    expect(result.totalMultiplyYield).toBeGreaterThan(0);
     expect(result.totalLendingInterest).toBeGreaterThan(0);
   });
 
@@ -133,7 +157,9 @@ describe('Simulator', () => {
     const result = runSimulation(frTicks, priceTicks, defaultConfig);
     // SOL buy and hold: (150-100)/100 = 50%
     expect(result.solBuyAndHoldReturn).toBeCloseTo(0.5, 1);
-    // Lending only should be positive
+    // Benchmarks should be positive
+    expect(result.multiplyOnlyReturn).toBeGreaterThan(0);
     expect(result.lendingOnlyReturn).toBeGreaterThan(0);
+    expect(result.multiplyOnlyReturn).toBeGreaterThan(result.lendingOnlyReturn);
   });
 });

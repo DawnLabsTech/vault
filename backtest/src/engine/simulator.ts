@@ -4,6 +4,8 @@ import { calcSharpeRatio, calcMaxDrawdown } from '@bot/utils/math.js';
 import type { FrTick, SolPriceTick, BacktestConfig, BacktestResult, DailySnapshot } from '../types.js';
 import {
   createPortfolio,
+  allocateCapital,
+  accrueMultiplyYield,
   accrueLendingInterest,
   accrueFunding,
   accrueDawnsolYield,
@@ -26,6 +28,7 @@ export function runSimulation(
   config: BacktestConfig,
 ): BacktestResult {
   const portfolio = createPortfolio(config.initialCapital);
+  allocateCapital(portfolio, config.multiplyCapacity);
   const dailySnapshots: DailySnapshot[] = [];
   const navSeries: number[] = [];
   const dailyReturns: number[] = [];
@@ -65,6 +68,7 @@ export function runSimulation(
     }
 
     // 1. Accrue yields
+    accrueMultiplyYield(portfolio, config.multiplyApy);
     accrueLendingInterest(portfolio, config.lendingApy);
 
     if (portfolio.state === BotState.BASE_DN) {
@@ -105,11 +109,14 @@ export function runSimulation(
       }
     }
 
-    // 4. Update NAV
+    // 4. Reallocate idle capital (Multiply-first, Lending-overflow)
+    allocateCapital(portfolio, config.multiplyCapacity);
+
+    // 5. Update NAV
     updateNav(portfolio, solPrice);
     navSeries.push(portfolio.totalNavUsdc);
 
-    // 5. Daily snapshot (at day boundary)
+    // 6. Daily snapshot (at day boundary)
     if (tickDate !== lastDate) {
       if (lastDate !== '') {
         const dailyReturn = dayStartNav > 0
@@ -150,6 +157,7 @@ export function runSimulation(
     ? (endSolPrice - startSolPrice) / startSolPrice
     : 0;
   const totalHours = totalDays * 24;
+  const multiplyOnlyReturn = Math.pow(1 + config.multiplyApy / 100, totalHours / HOURS_PER_YEAR) - 1;
   const lendingOnlyReturn = Math.pow(1 + config.lendingApy / 100, totalHours / HOURS_PER_YEAR) - 1;
 
   return {
@@ -165,9 +173,11 @@ export function runSimulation(
     totalExits,
     totalFees: portfolio.totalFees,
     totalFundingReceived: portfolio.totalFundingReceived,
+    totalMultiplyYield: portfolio.totalMultiplyYield,
     totalLendingInterest: portfolio.totalLendingInterest,
     totalStakingYield: portfolio.totalStakingYield,
     solBuyAndHoldReturn,
+    multiplyOnlyReturn,
     lendingOnlyReturn,
   };
 }

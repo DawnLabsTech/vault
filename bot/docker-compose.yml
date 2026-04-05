@@ -3,7 +3,7 @@ services:
     build: .
     container_name: vault-bot
     restart: unless-stopped
-    env_file: .env
+    env_file: ../.env
     ports:
       - "127.0.0.1:3000:3000"
     volumes:

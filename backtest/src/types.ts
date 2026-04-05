@@ -21,7 +21,8 @@ export interface SolPriceTick {
 /** Portfolio state during simulation */
 export interface SimPortfolio {
   state: BotState;
-  lendingUsdc: number;
+  multiplyUsdc: number;       // USDC deployed in Kamino Multiply
+  lendingUsdc: number;        // overflow USDC in lending
   dawnsolAmount: number;      // SOL equivalent staked
   shortSolAmount: number;     // Binance short size in SOL
   binanceMarginUsdc: number;  // USDC margin on Binance
@@ -31,6 +32,7 @@ export interface SimPortfolio {
   // Cumulative trackers
   totalFees: number;
   totalFundingReceived: number;
+  totalMultiplyYield: number;
   totalLendingInterest: number;
   totalStakingYield: number;
 }
@@ -51,6 +53,8 @@ export interface BacktestConfig {
   startDate: string;      // YYYY-MM-DD
   endDate: string;
   initialCapital: number;
+  multiplyApy: number;    // fixed annual % for Kamino Multiply
+  multiplyCapacity: number; // max USDC in Multiply (Infinity = unlimited)
   lendingApy: number;     // fixed annual %
   dawnsolApy: number;     // fixed annual %
   frEntryAnnualized: number;
@@ -76,9 +80,11 @@ export interface BacktestResult {
   totalExits: number;
   totalFees: number;
   totalFundingReceived: number;
+  totalMultiplyYield: number;
   totalLendingInterest: number;
   totalStakingYield: number;
   // Benchmarks
   solBuyAndHoldReturn: number;
+  multiplyOnlyReturn: number;
   lendingOnlyReturn: number;
 }

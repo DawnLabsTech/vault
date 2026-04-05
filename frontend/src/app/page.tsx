@@ -13,65 +13,80 @@ import { FrChart } from '@/components/charts/FrChart';
 import { AllocationChart } from '@/components/charts/AllocationChart';
 import { PnlTable } from '@/components/tables/PnlTable';
 import { EventsTable } from '@/components/tables/EventsTable';
+import { AdvisorTable } from '@/components/tables/AdvisorTable';
+import { ChatWidget } from '@/components/chat/ChatWidget';
 
 export default function Dashboard() {
   return (
-    <main className="min-h-screen p-4 md:p-6 max-w-7xl mx-auto">
+    <>
+    <main className="min-h-screen p-4 md:p-6 max-w-[1600px] mx-auto">
       <Header />
 
-      {/* Top cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        <BotStatusCard />
-        <PortfolioCard />
-        <PerformanceCard />
-      </div>
+      <div className="flex flex-col xl:flex-row gap-4">
+        {/* Main content — left */}
+        <div className="flex-1 min-w-0">
+          {/* Top cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <BotStatusCard />
+            <PortfolioCard />
+            <PerformanceCard />
+          </div>
 
-      {/* Signals + Allocation */}
-      <section className="mb-4">
-        <SectionHeader
-          title="Signals & Allocation"
-          description="Funding gate and live split between the base sleeve and alpha sleeve"
-        />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <FrChart />
-          <AllocationChart />
+          {/* Signals + Allocation */}
+          <section className="mb-4">
+            <SectionHeader
+              title="Signals & Allocation"
+              description="Funding gate and live split between the base sleeve and alpha sleeve"
+            />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <FrChart />
+              <AllocationChart />
+            </div>
+          </section>
+
+          {/* PnL Overview */}
+          <section className="mb-5">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <PnlChart />
+              <PnlTable />
+            </div>
+          </section>
+
+          {/* Base Layer */}
+          <section className="mb-5">
+            <SectionHeader
+              title="Base Layer"
+              description="Multiply is primary; lending absorbs overflow, diversification, and idle deployable cash"
+            />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <MultiplyCard />
+              <LendingCard />
+            </div>
+          </section>
+
+          {/* Alpha Layer */}
+          <section className="mb-5">
+            <SectionHeader
+              title="Alpha Layer"
+              description="Opportunistic DN overlay that stays parked until funding conditions improve"
+            />
+            <div className="grid grid-cols-1 gap-4">
+              <AlphaPositionsCard />
+            </div>
+          </section>
+
+          {/* Events */}
+          <div className="mb-4">
+            <EventsTable />
+          </div>
         </div>
-      </section>
 
-      {/* PnL Overview */}
-      <section className="mb-5">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <PnlChart />
-          <PnlTable />
-        </div>
-      </section>
-
-      {/* Base Layer */}
-      <section className="mb-5">
-        <SectionHeader
-          title="Base Layer"
-          description="Multiply is primary; lending absorbs overflow, diversification, and idle deployable cash"
-        />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <MultiplyCard />
-          <LendingCard />
-        </div>
-      </section>
-
-      {/* Alpha Layer */}
-      <section className="mb-5">
-        <SectionHeader
-          title="Alpha Layer"
-          description="Opportunistic DN overlay that stays parked until funding conditions improve"
-        />
-        <div className="grid grid-cols-1 gap-4">
-          <AlphaPositionsCard />
-        </div>
-      </section>
-
-      {/* Events */}
-      <div className="mb-4">
-        <EventsTable />
+        {/* AI Advisor — right sidebar */}
+        <aside className="w-full xl:w-80 xl:shrink-0">
+          <div className="xl:sticky xl:top-4">
+            <AdvisorTable />
+          </div>
+        </aside>
       </div>
 
       {/* Footer */}
@@ -79,5 +94,8 @@ export default function Dashboard() {
         Dawn Vault Strategy Bot &mdash; Real-time Dashboard
       </footer>
     </main>
+
+    <ChatWidget />
+    </>
   );
 }

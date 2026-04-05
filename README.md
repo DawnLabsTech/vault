@@ -145,12 +145,18 @@ bot/src/
 │   ├── defi/              # Kamino (Multiply/Loop/Lending), Jupiter (Swap/Lend), Onre APY
 │   ├── binance/           # REST + WebSocket clients for Futures
 │   └── solana/            # RPC, wallet, token operations
+├── advisor/
+│   ├── advisor.ts         # AI Advisor: Claude API integration, evaluation loop
+│   ├── context-builder.ts # Builds structured context from bot state for LLM
+│   ├── prompt.ts          # System prompt definition
+│   ├── store.ts           # SQLite storage for recommendations + accuracy tracking
+│   └── types.ts           # AdvisorRecommendation, AdvisorContext types
 ├── measurement/
 │   ├── snapshots.ts       # Portfolio state snapshots (SQLite)
 │   ├── pnl.ts             # Daily P&L calculation
 │   ├── events.ts          # Ledger event recording
 │   └── state-store.ts     # Persistent bot state (JSON)
-└── utils/                 # Logger, notifications (Slack), retry, tx-fee
+└── utils/                 # Logger, notifications (Slack/Telegram), retry, tx-fee
 ```
 
 ### Risk Management
@@ -173,6 +179,43 @@ Notes on current Multiply risk logic:
 - Active Multiply positions stop accepting new capital at score `>= 75`.
 - Active Multiply positions are trimmed to the dynamic `maxPositionCap` when score is in the `75-89` band.
 - Active Multiply positions are fully exited when score reaches `>= 90`.
+
+### AI Advisor
+
+An LLM-powered advisory layer that evaluates the bot's state and provides recommendations. The advisor does **not** execute actions — it observes and suggests.
+
+**Architecture:** Context Builder (bot state → structured text) → Claude API (Sonnet) → Recommendation parsing → SQLite storage + Telegram notification + Dashboard display.
+
+**Trigger Conditions:**
+
+| Trigger | Condition | Check Frequency |
+|---|---|---|
+| Periodic | Every 6 hours | Scheduler |
+| SOL price move | >= 5% change since last run | Snapshot (5 min) |
+| Risk score spike | Score crosses 50 from below | Multiply health check (5 min) |
+| FR regime change | Sign flip or >= 10% annualized swing | Snapshot (5 min) |
+
+All event triggers enforce a 30-minute cooldown to prevent rapid-fire API calls.
+
+**Recommendation Format:**
+
+Each recommendation includes category (`rebalance`, `dn_entry`, `dn_exit`, `risk_alert`, `param_adjust`), confidence (`high`/`medium`/`low`), urgency (`immediate`/`next_cycle`/`informational`), and an override flag indicating whether the AI disagrees with the rule-based system.
+
+- `high` confidence = data-backed, verifiable from actual numbers
+- `medium` confidence = reasonable inference, depends on assumptions
+- `override = true` = AI recommends a different action than the rule would take
+
+**Local Testing:**
+
+```bash
+# Dry run — print context without calling Claude
+BOT_API_URL=http://your-bot:3000 tsx scripts/run-advisor.ts --dry-run
+
+# Full run with DB save
+tsx scripts/run-advisor.ts --save
+```
+
+**Dashboard:** The AI Advisor panel appears as a sticky sidebar on the monitoring dashboard, showing the latest recommendations in a compact expandable format.
 
 ## Research Notes
 

@@ -1,4 +1,10 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import { resolve } from 'path';
+
+// Load env: vault root first, then bot dir as override
+dotenv.config({ path: resolve(process.cwd(), '../.env') });
+dotenv.config(); // bot/.env overrides if present
+
 import { createChildLogger } from './utils/logger.js';
 import { validateEnv } from './utils/validate-env.js';
 import { configManager, getConfig } from './config.js';
@@ -24,6 +30,8 @@ import { SolanaTransactionSender } from './connectors/solana/tx-sender.js';
 import { buildDnConnectors } from './connectors/dn-connectors.js';
 import { MarketScanner } from './core/market-scanner.js';
 import { MultiplyRiskScorer } from './risk/multiply-risk-scorer.js';
+import { Advisor } from './advisor/advisor.js';
+import { ChatService } from './chat/chat-service.js';
 import type { LendingProtocol } from './types.js';
 
 const log = createChildLogger('main');
@@ -227,6 +235,67 @@ async function main(): Promise<void> {
     rpcUrl,
   );
 
+  // Initialize AI Advisor (optional — requires ANTHROPIC_API_KEY)
+  let advisor: Advisor | null = null;
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      advisor = new Advisor(
+        { frMonitor, baseAllocator, kaminoMultiplyAdapters, marketScanner, db },
+        db,
+      );
+      log.info('AI Advisor initialized');
+    } catch (err) {
+      log.warn({ error: (err as Error).message }, 'AI Advisor initialization failed — running without advisor');
+    }
+  } else {
+    log.info('ANTHROPIC_API_KEY not set — AI Advisor disabled');
+  }
+
+  // Initialize Chat Service (optional — requires ANTHROPIC_API_KEY)
+  let chatService: ChatService | null = null;
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      chatService = new ChatService(
+        { frMonitor, baseAllocator, kaminoMultiplyAdapters, marketScanner, db, advisorStore: advisor?.getStore() ?? null },
+        db,
+      );
+      // Wire backtest runner via child process (avoids cross-package TS rootDir issues)
+      chatService.setBacktestRunner(async (params) => {
+        const { execFile } = await import('child_process');
+        const { promisify } = await import('util');
+        const execFileAsync = promisify(execFile);
+
+        const args: string[] = ['--output', 'json'];
+        if (params['startDate']) args.push('--start', String(params['startDate']));
+        if (params['endDate']) args.push('--end', String(params['endDate']));
+        if (params['multiplyApy'] != null) args.push('--multiply-apy', String(params['multiplyApy']));
+        if (params['lendingApy'] != null) args.push('--lending-apy', String(params['lendingApy']));
+        if (params['dawnsolApy'] != null) args.push('--dawnsol-apy', String(params['dawnsolApy']));
+        if (params['frEntryAnnualized'] != null) args.push('--entry-fr', String(params['frEntryAnnualized']));
+        if (params['frExitAnnualized'] != null) args.push('--exit-fr', String(params['frExitAnnualized']));
+        if (params['frEmergencyAnnualized'] != null) args.push('--emergency-fr', String(params['frEmergencyAnnualized']));
+        if (params['dnAllocation'] != null) args.push('--dn-alloc', String(params['dnAllocation']));
+        if (params['confirmDays'] != null) args.push('--confirm-days', String(params['confirmDays']));
+        if (params['initialCapital'] != null) args.push('--capital', String(params['initialCapital']));
+
+        const { stdout } = await execFileAsync('npx', ['tsx', 'backtest/src/cli.ts', ...args], {
+          cwd: resolve(process.cwd(), '..'),
+          timeout: 60_000,
+        });
+
+        // Extract JSON from stdout (skip log lines)
+        const jsonStart = stdout.indexOf('{');
+        if (jsonStart === -1) throw new Error('No JSON output from backtest');
+        const jsonStr = stdout.slice(jsonStart);
+        return JSON.parse(jsonStr) as Record<string, unknown>;
+      });
+      log.info('Backtest runner wired to chat service');
+      log.info('Chat service initialized');
+    } catch (err) {
+      log.warn({ error: (err as Error).message }, 'Chat service initialization failed');
+    }
+  }
+
   // Create orchestrator
   const orchestrator = new Orchestrator({
     binanceRest,
@@ -242,6 +311,7 @@ async function main(): Promise<void> {
     kaminoLoop: kaminoLoop ?? null,
     kaminoMultiplyAdapters,
     marketScanner,
+    advisor,
   });
 
   // Start API server
@@ -251,6 +321,8 @@ async function main(): Promise<void> {
   apiServer.setMultiplyAdapters(kaminoMultiplyAdapters);
   apiServer.setMarketScanner(marketScanner);
   apiServer.setPerpExchange(perpExchange);
+  apiServer.setAdvisorStore(advisor?.getStore() ?? null);
+  apiServer.setChatService(chatService);
   const apiPort = Number.parseInt(process.env.API_PORT || '3000', 10);
   apiServer.start(Number.isFinite(apiPort) ? apiPort : 3000);
 

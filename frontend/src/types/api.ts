@@ -186,6 +186,32 @@ export interface MultiplyMarketCandidate {
   riskAssessment: RiskAssessmentData | null;
 }
 
+// /api/advisor response
+export interface AdvisorRecommendation {
+  timestamp: number;
+  category: 'rebalance' | 'dn_entry' | 'dn_exit' | 'risk_alert' | 'param_adjust';
+  action: string;
+  reasoning: string;
+  confidence: 'high' | 'medium' | 'low';
+  urgency: 'immediate' | 'next_cycle' | 'informational';
+  currentRule: string;
+  override: boolean;
+}
+
+export interface AdvisorStats {
+  total: number;
+  correct: number;
+  incorrect: number;
+  neutral: number;
+  pending: number;
+}
+
+export interface AdvisorResponse {
+  recommendations: AdvisorRecommendation[];
+  stats: AdvisorStats | null;
+  enabled: boolean;
+}
+
 // /api/events response item
 export interface LedgerEvent {
   timestamp: string;

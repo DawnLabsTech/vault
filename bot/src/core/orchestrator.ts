@@ -69,6 +69,13 @@ export class Orchestrator {
 
   // Snapshot cache — shared across healthCheck, evaluateAndAct, executeAction
   private snapshotCache: { data: PortfolioSnapshot; fetchedAt: number } | null = null;
+
+  // AI Advisor event trigger tracking
+  private lastAdvisorSolPrice: number = 0;
+  private lastAdvisorRiskScore: number = 0;
+  private lastAdvisorFrAnnualized: number = 0;
+  private lastAdvisorRunAt: number = 0;
+  private static readonly ADVISOR_COOLDOWN_MS = 1_800_000; // 30 min between event-triggered runs
   private static readonly SNAPSHOT_CACHE_TTL_MS = 10_000;
 
   // WebSocket connection tracking
@@ -455,6 +462,9 @@ export class Orchestrator {
       const snapshot = await this.buildSnapshot();
       this.snapshotCache = { data: snapshot, fetchedAt: Date.now() };
       recordSnapshot(snapshot);
+
+      // Check advisor event triggers (price change, FR change)
+      await this.checkAdvisorEventTriggers(snapshot);
     } catch (err) {
       log.error({ error: (err as Error).message }, 'Failed to take snapshot');
     }
@@ -756,6 +766,11 @@ export class Orchestrator {
           },
           'Kamino Multiply health/risk check',
         );
+
+        // Check advisor event trigger for risk score spike
+        if (riskAssessment && this.snapshotCache) {
+          await this.checkAdvisorEventTriggers(this.snapshotCache.data, riskAssessment.compositeScore);
+        }
 
         const riskAction = determineMultiplyRiskAction({
           currentBalance,
@@ -1152,19 +1167,71 @@ export class Orchestrator {
     }
   }
 
-  private async runAdvisor(): Promise<void> {
+  private async runAdvisor(trigger?: string): Promise<void> {
     if (!this.deps.advisor) return;
     try {
+      if (trigger) {
+        log.info({ trigger }, 'AI Advisor triggered by event');
+      }
       const config = getConfig();
       const recommendations = await this.deps.advisor.evaluate(this.botState, config);
+      this.lastAdvisorRunAt = Date.now();
       if (recommendations.length > 0) {
-        log.info({ count: recommendations.length }, 'AI Advisor produced recommendations');
+        log.info({ count: recommendations.length, trigger }, 'AI Advisor produced recommendations');
       } else {
-        log.debug('AI Advisor: no recommendations');
+        log.debug({ trigger }, 'AI Advisor: no recommendations');
       }
     } catch (err) {
       log.error({ error: (err as Error).message }, 'AI Advisor evaluation failed');
     }
+  }
+
+  /**
+   * Check if an event should trigger an advisor run.
+   * Called from snapshot and health check flows.
+   */
+  private async checkAdvisorEventTriggers(snapshot: PortfolioSnapshot, riskScore?: number): Promise<void> {
+    if (!this.deps.advisor) return;
+
+    // Cooldown: don't run more than once per 30 minutes
+    if (Date.now() - this.lastAdvisorRunAt < Orchestrator.ADVISOR_COOLDOWN_MS) return;
+
+    // 1. SOL price change > 5%
+    if (this.lastAdvisorSolPrice > 0 && snapshot.solPrice > 0) {
+      const priceDelta = Math.abs(snapshot.solPrice - this.lastAdvisorSolPrice) / this.lastAdvisorSolPrice;
+      if (priceDelta >= 0.05) {
+        this.lastAdvisorSolPrice = snapshot.solPrice;
+        await this.runAdvisor(`sol_price_${priceDelta > 0 ? 'up' : 'down'}_${(priceDelta * 100).toFixed(1)}%`);
+        return;
+      }
+    }
+    if (this.lastAdvisorSolPrice === 0) {
+      this.lastAdvisorSolPrice = snapshot.solPrice;
+    }
+
+    // 2. Risk score jumped above 50 (from below)
+    if (riskScore !== undefined) {
+      if (riskScore >= 50 && this.lastAdvisorRiskScore < 50) {
+        this.lastAdvisorRiskScore = riskScore;
+        await this.runAdvisor(`risk_score_spike_${riskScore.toFixed(0)}`);
+        return;
+      }
+      this.lastAdvisorRiskScore = riskScore;
+    }
+
+    // 3. FR regime change (sign flip or large move)
+    const latestFr = this.deps.frMonitor.getLatestAnnualized();
+    if (this.lastAdvisorFrAnnualized !== 0) {
+      const frFlipped = (latestFr > 0 && this.lastAdvisorFrAnnualized < 0) ||
+                        (latestFr < 0 && this.lastAdvisorFrAnnualized > 0);
+      const frBigMove = Math.abs(latestFr - this.lastAdvisorFrAnnualized) > 10; // >10% annualized swing
+      if (frFlipped || frBigMove) {
+        this.lastAdvisorFrAnnualized = latestFr;
+        await this.runAdvisor(`fr_${frFlipped ? 'sign_flip' : 'big_move'}_${latestFr.toFixed(1)}%`);
+        return;
+      }
+    }
+    this.lastAdvisorFrAnnualized = latestFr;
   }
 
   getBotState(): BotState {

@@ -31,10 +31,33 @@ export class FrMonitor {
 
   // ── Write ────────────────────────────────────────────────
 
-  /** Record a new funding rate data point. */
+  /** Track last recorded funding time to deduplicate WebSocket events. */
+  private lastRecordedFundingTime: number = 0;
+
+  /** Record a new funding rate data point. Deduplicates by fundingTime (rounded to nearest hour). */
   recordFundingRate(data: FundingRateData): void {
+    // Round to nearest hour to handle ms-level jitter (e.g. 00:00:00.000Z vs 00:00:00.008Z)
+    const roundedTime = Math.round(data.fundingTime / 3_600_000) * 3_600_000;
+
+    // Skip if we already recorded this funding period (in-memory dedup)
+    if (roundedTime === this.lastRecordedFundingTime) {
+      return;
+    }
+
     const annualized = frToAnnualized(data.fundingRate, this.periodsPerDay);
-    const ts = new Date(data.fundingTime).toISOString();
+    const ts = new Date(roundedTime).toISOString();
+
+    // DB-level dedup: check if this hour already exists
+    const existing = this.db
+      .prepare("SELECT id FROM fr_history WHERE timestamp >= ? AND timestamp < ? LIMIT 1")
+      .get(
+        new Date(roundedTime).toISOString(),
+        new Date(roundedTime + 3_600_000).toISOString(),
+      ) as { id: number } | undefined;
+    if (existing) {
+      this.lastRecordedFundingTime = roundedTime;
+      return;
+    }
 
     this.insertStmt.run(
       ts,
@@ -44,7 +67,9 @@ export class FrMonitor {
       data.markPrice ?? null,
     );
 
-    log.debug(
+    this.lastRecordedFundingTime = roundedTime;
+
+    log.info(
       { symbol: data.symbol, fr: data.fundingRate, annualized: annualized.toFixed(2) },
       'Recorded funding rate',
     );

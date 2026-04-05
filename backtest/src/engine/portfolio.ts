@@ -5,10 +5,12 @@ import { calcEntryFees, calcExitFees } from './fee-model.js';
 const HOURS_PER_YEAR = 8760;
 const TICK_HOURS = 8;
 
-/** Create initial portfolio in BASE_ONLY state */
+/** Create initial portfolio in BASE_ONLY state.
+ *  Capital starts unallocated; call allocateCapital() to distribute. */
 export function createPortfolio(initialCapital: number): SimPortfolio {
   return {
     state: BotState.BASE_ONLY,
+    multiplyUsdc: 0,
     lendingUsdc: initialCapital,
     dawnsolAmount: 0,
     shortSolAmount: 0,
@@ -17,9 +19,30 @@ export function createPortfolio(initialCapital: number): SimPortfolio {
     totalNavUsdc: initialCapital,
     totalFees: 0,
     totalFundingReceived: 0,
+    totalMultiplyYield: 0,
     totalLendingInterest: 0,
     totalStakingYield: 0,
   };
+}
+
+/** Accrue Kamino Multiply yield for one 8h tick */
+export function accrueMultiplyYield(
+  portfolio: SimPortfolio,
+  multiplyApy: number,
+): void {
+  const yieldAmount = portfolio.multiplyUsdc * (multiplyApy / 100) * (TICK_HOURS / HOURS_PER_YEAR);
+  portfolio.multiplyUsdc += yieldAmount;
+  portfolio.totalMultiplyYield += yieldAmount;
+}
+
+/** Allocate idle USDC: Multiply first (up to capacity), overflow to lending */
+export function allocateCapital(
+  portfolio: SimPortfolio,
+  multiplyCapacity: number,
+): void {
+  const idleUsdc = portfolio.multiplyUsdc + portfolio.lendingUsdc;
+  portfolio.multiplyUsdc = Math.min(idleUsdc, multiplyCapacity);
+  portfolio.lendingUsdc = Math.max(idleUsdc - portfolio.multiplyUsdc, 0);
 }
 
 /** Accrue lending interest for one 8h tick */
@@ -56,7 +79,8 @@ export function accrueDawnsolYield(
   portfolio.totalStakingYield += yieldUsdc;
 }
 
-/** Enter DN position: split capital between dawnSOL + Binance short */
+/** Enter DN position: split capital between dawnSOL + Binance short.
+ *  Pulls from lending first, then Multiply if insufficient. */
 export function enterDn(
   portfolio: SimPortfolio,
   solPrice: number,
@@ -65,11 +89,21 @@ export function enterDn(
   const dnUsdc = portfolio.totalNavUsdc * dnAllocation;
   const fees = calcEntryFees(dnUsdc, solPrice);
 
+  // Pull from lending first, then Multiply
+  let remaining = dnUsdc;
+  const fromLending = Math.min(portfolio.lendingUsdc, remaining);
+  portfolio.lendingUsdc -= fromLending;
+  remaining -= fromLending;
+
+  if (remaining > 0) {
+    const fromMultiply = Math.min(portfolio.multiplyUsdc, remaining);
+    portfolio.multiplyUsdc -= fromMultiply;
+  }
+
   // Half goes to dawnSOL (buy SOL → stake), half to Binance margin
   const halfUsdc = (dnUsdc - fees) / 2;
   const solAmount = halfUsdc / solPrice;
 
-  portfolio.lendingUsdc -= dnUsdc;
   portfolio.dawnsolAmount = solAmount;
   portfolio.shortSolAmount = solAmount;
   portfolio.binanceMarginUsdc = halfUsdc;
@@ -116,5 +150,5 @@ export function updateNav(
     binanceValue += shortPnl;
   }
 
-  portfolio.totalNavUsdc = portfolio.lendingUsdc + dawnsolValue + binanceValue;
+  portfolio.totalNavUsdc = portfolio.multiplyUsdc + portfolio.lendingUsdc + dawnsolValue + binanceValue;
 }

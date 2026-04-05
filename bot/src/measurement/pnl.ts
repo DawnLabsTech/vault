@@ -180,10 +180,11 @@ export function estimateExternalUsdcFlow(
 ): number {
   if (snapshots.length < 2) return 0;
 
-  // Absolute NAV change threshold per snapshot interval to classify as
-  // external flow. Organic moves between 5-min snapshots are typically
-  // < $1 for a sub-$10k portfolio.
-  const JUMP_THRESHOLD_USD = 5;
+  // NAV change threshold per snapshot interval to classify as external flow,
+  // expressed as a fraction of starting NAV. Organic moves between 5-min
+  // snapshots are typically < 0.5% for a stablecoin-based strategy.
+  const startNav = snapshots[0]!.totalNavUsdc;
+  const JUMP_THRESHOLD_USD = Math.max(startNav * 0.02, 2); // 2% of NAV, min $2
 
   let totalExternalFlow = 0;
   for (let i = 1; i < snapshots.length; i++) {

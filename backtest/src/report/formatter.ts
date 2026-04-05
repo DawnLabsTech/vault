@@ -22,7 +22,7 @@ export function printTable(result: BacktestResult): void {
 
   // Print config params
   const c = result.config;
-  console.log(`\nParameters: entry=${c.frEntryAnnualized}% exit=${c.frExitAnnualized}% emergency=${c.frEmergencyAnnualized}% confirm=${c.confirmDays}d alloc=${(c.dnAllocation * 100).toFixed(0)}% lending=${c.lendingApy}% dawnsol=${c.dawnsolApy}%`);
+  console.log(`\nParameters: entry=${c.frEntryAnnualized}% exit=${c.frExitAnnualized}% emergency=${c.frEmergencyAnnualized}% confirm=${c.confirmDays}d alloc=${(c.dnAllocation * 100).toFixed(0)}% multiply=${c.multiplyApy}%${isFinite(c.multiplyCapacity) ? ' cap=$' + c.multiplyCapacity.toLocaleString() : ''} lending=${c.lendingApy}% dawnsol=${c.dawnsolApy}%`);
 }
 
 /** Output results as CSV */

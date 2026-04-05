@@ -91,9 +91,10 @@ export interface AdvisorConfig {
   priceChangeThresholdPct: number;
   /** Maximum API calls per day to manage cost (default 20) */
   maxCallsPerDay: number;
-  /** Model to use (default 'claude-sonnet-4-6-20250514') */
+  /** Model to use (default 'claude-sonnet-4-6') */
   model: string;
   /** Max output tokens (default 1024) */
+  /** Max output tokens (default 2048) */
   maxTokens: number;
   /** Whether to send notifications for recommendations (default true) */
   notifyEnabled: boolean;
