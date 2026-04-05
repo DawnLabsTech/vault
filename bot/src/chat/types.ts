@@ -19,5 +19,6 @@ export interface ChatConfig {
   model: string;
   maxTokens: number;
   maxMessagesPerHour: number;
+  maxMessagesPerDay: number;
   maxHistoryMessages: number;
 }

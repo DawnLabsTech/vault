@@ -22,6 +22,7 @@ const DEFAULT_CONFIG: ChatConfig = {
   model: 'claude-haiku-4-5-20251001',
   maxTokens: 2048,
   maxMessagesPerHour: 30,
+  maxMessagesPerDay: 100,
   maxHistoryMessages: 10,
 };
 
@@ -65,6 +66,14 @@ export class ChatService {
   ): AsyncGenerator<string> {
     const now = Date.now();
     const oneHourAgo = now - 3_600_000;
+
+    // Global daily rate limit (all clients/sessions combined)
+    const oneDayAgo = now - 86_400_000;
+    const dailyCount = this.store.countAllRecent(oneDayAgo);
+    if (dailyCount >= this.config.maxMessagesPerDay) {
+      yield 'Daily message limit reached. Please try again tomorrow.';
+      return;
+    }
 
     // Rate limit by client as well as session to make session rotation less useful.
     const recentClientCount = this.getRecentClientCount(clientId, oneHourAgo);

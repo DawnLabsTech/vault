@@ -64,6 +64,15 @@ export class ChatStore {
       .get(sessionId, 'user', sinceMs) as { cnt: number };
     return row.cnt;
   }
+
+  countAllRecent(sinceMs: number): number {
+    const row = this.db
+      .prepare(
+        'SELECT COUNT(*) as cnt FROM chat_messages WHERE role = ? AND timestamp >= ?',
+      )
+      .get('user', sinceMs) as { cnt: number };
+    return row.cnt;
+  }
 }
 
 function rowToMessage(row: Record<string, unknown>): ChatMessage {
