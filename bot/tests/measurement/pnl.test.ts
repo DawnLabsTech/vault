@@ -179,7 +179,8 @@ describe('pnl external flow adjustments', () => {
     const { getPerformanceSummary } = await import('../../src/measurement/pnl.js');
     const summary = getPerformanceSummary();
 
-    expect(summary.totalReturn).toBeCloseTo(0.01, 8);
+    // MWR: invested 100 initial + 50 deposit = 150, final NAV = 151 → (151-150)/150
+    expect(summary.totalReturn).toBeCloseTo(1 / 150, 4);
   });
 
   it('ignores internal rebalance events that happen after the last snapshot of the day', async () => {

@@ -404,6 +404,34 @@ export interface PerformanceSummary {
   totalFees: number;
 }
 
+/**
+ * Compute total invested capital (Money-Weighted basis).
+ *
+ * investedCapital = first day's startingNav (initial deposit)
+ *                 + sum of all detected external inflows across days.
+ *
+ * External flows are detected per-day using the NAV-jump method in
+ * estimateExternalUsdcFlow.  Positive flow = deposit, negative = withdrawal.
+ */
+function computeInvestedCapital(validPnl: DailyPnL[]): number {
+  if (validPnl.length === 0) return 0;
+
+  let invested = validPnl[0]!.startingNav; // initial capital
+
+  for (const day of validPnl) {
+    // Re-derive external flow for this day from the PnL row:
+    // dailyReturn = (endNav - startNav - flow) / startNav
+    //  => flow = endNav - startNav - dailyReturn * startNav
+    if (day.startingNav > 0) {
+      const flow = round(day.endingNav - day.startingNav - day.dailyReturn * day.startingNav, 6);
+      if (flow > 0) invested += flow;   // deposit
+      // withdrawals reduce invested capital
+      if (flow < 0) invested = Math.max(invested + flow, 0.01);
+    }
+  }
+  return invested;
+}
+
 export function getPerformanceSummary(): PerformanceSummary {
   const allPnl = getDailyPnlRange('0000-01-01', '9999-12-31');
 
@@ -426,7 +454,12 @@ export function getPerformanceSummary(): PerformanceSummary {
   const totalDays = validPnl.length;
   const dailyReturns = validPnl.map(p => p.dailyReturn);
 
-  const totalReturn = validPnl[validPnl.length - 1]!.cumulativeReturn;
+  // Money-weighted return: (currentNAV - totalInvested) / totalInvested
+  const currentNav = validPnl[validPnl.length - 1]!.endingNav;
+  const investedCapital = computeInvestedCapital(validPnl);
+  const totalReturn = investedCapital > 0
+    ? (currentNav - investedCapital) / investedCapital
+    : 0;
 
   // Annualized return: (1 + totalReturn)^(365/days) - 1
   // Only annualize when we have >= 7 days of data to avoid misleading extrapolation
