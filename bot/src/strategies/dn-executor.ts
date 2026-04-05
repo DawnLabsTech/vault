@@ -71,6 +71,12 @@ export interface DnConnectors {
 
 const BINANCE_DEPOSIT_TIMEOUT_MS = 10 * 60 * 1000; // 10 min
 
+function assertPositiveFinite(value: number, label: string): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${label} must be a positive finite number`);
+  }
+}
+
 function emptyState(): DnExecutorState {
   return {
     currentStep: DnStep.IDLE,
@@ -122,6 +128,7 @@ export class DnExecutor {
   //
 
   async startEntry(usdcAmount: number): Promise<DnExecutorState> {
+    assertPositiveFinite(usdcAmount, 'Entry amount');
     log.info({ usdcAmount }, 'Starting DN entry');
     this.state = emptyState();
     this.state.entryAmount = usdcAmount;
@@ -163,6 +170,10 @@ export class DnExecutor {
   //
 
   async startExit(): Promise<DnExecutorState> {
+    if (this.state.perpSize <= 0 && this.state.dawnsolAmount <= 0 && this.state.solAmount <= 0) {
+      log.info('No active DN position to exit');
+      return this.state;
+    }
     log.info('Starting DN exit');
     this.events = [];
 
@@ -288,6 +299,7 @@ export class DnExecutor {
   // ── Individual step implementations ────────────────────────────────────
 
   private async stepWithdrawLending(): Promise<boolean> {
+    assertPositiveFinite(this.state.entryAmount, 'Lending withdrawal amount');
     const txSig = await this.connectors.withdrawFromLending(
       this.state.entryAmount,
     );
@@ -305,6 +317,7 @@ export class DnExecutor {
   }
 
   private async stepTransferMarginToBinance(): Promise<boolean> {
+    assertPositiveFinite(this.state.marginAmount, 'Binance margin transfer amount');
     const txSig = await this.connectors.transferUsdcToBinance(
       this.state.marginAmount,
     );
@@ -350,7 +363,9 @@ export class DnExecutor {
   private async stepOpenBothLegs(): Promise<boolean> {
     // Get SOL price to size the short leg
     const solPrice = await this.connectors.getSolPrice();
+    assertPositiveFinite(solPrice, 'SOL price');
     const shortSolAmount = round(this.state.longAmount / solPrice, 3);
+    assertPositiveFinite(shortSolAmount, 'Short SOL amount');
 
     log.info(
       { longUsdc: this.state.longAmount, shortSol: shortSolAmount, solPrice },
@@ -361,12 +376,19 @@ export class DnExecutor {
     const swapPromise =
       this.state.dawnsolAmount > 0
         ? Promise.resolve(null)
-        : this.connectors.swapUsdcToDawnSol(this.state.longAmount);
+        : this.connectors.swapUsdcToDawnSol(this.state.longAmount).then((result) => {
+          assertPositiveFinite(result.dawnsolAmount, 'dawnSOL amount');
+          return result;
+        });
 
     const shortPromise =
       this.state.perpSize > 0
         ? Promise.resolve(null)
-        : this.connectors.openPerpShort(shortSolAmount);
+        : this.connectors.openPerpShort(shortSolAmount).then((result) => {
+          assertPositiveFinite(result.size, 'Perp short size');
+          assertPositiveFinite(result.entryPrice, 'Perp entry price');
+          return result;
+        });
 
     const [swapSettled, shortSettled] = await Promise.allSettled([
       swapPromise,
@@ -461,7 +483,10 @@ export class DnExecutor {
     const swapPromise =
       this.state.dawnsolAmount === 0
         ? Promise.resolve(null)
-        : this.connectors.swapDawnSolToSol(this.state.dawnsolAmount);
+        : this.connectors.swapDawnSolToSol(this.state.dawnsolAmount).then((result) => {
+          assertPositiveFinite(result.solAmount, 'SOL amount');
+          return result;
+        });
 
     const [closeSettled, swapSettled] = await Promise.allSettled([
       closePromise,
@@ -530,7 +555,9 @@ export class DnExecutor {
   }
 
   private async stepSwapSolToUsdc(): Promise<boolean> {
+    assertPositiveFinite(this.state.solAmount, 'SOL amount to swap');
     const result = await this.connectors.swapSolToUsdc(this.state.solAmount);
+    assertPositiveFinite(result.usdcAmount, 'Recovered USDC amount');
     this.recordTx(DnStep.SWAP_SOL_USDC, result.txSig);
     this.events.push({
       timestamp: new Date().toISOString(),
@@ -555,6 +582,7 @@ export class DnExecutor {
   }
 
   private async stepDepositLending(): Promise<boolean> {
+    assertPositiveFinite(this.state.entryAmount, 'Lending deposit amount');
     const txSig = await this.connectors.depositToLending(
       this.state.entryAmount,
     );
@@ -575,6 +603,7 @@ export class DnExecutor {
   }
 
   private async stepTransferSpotToFutures(): Promise<boolean> {
+    assertPositiveFinite(this.state.marginAmount, 'Spot to Futures transfer amount');
     await this.connectors.transferSpotToFutures(this.state.marginAmount);
     this.events.push({
       timestamp: new Date().toISOString(),
@@ -592,6 +621,9 @@ export class DnExecutor {
 
   private async stepTransferFuturesToSpot(): Promise<boolean> {
     const balance = await this.connectors.getFuturesUsdcBalance();
+    if (!Number.isFinite(balance)) {
+      throw new Error('Futures wallet balance must be a finite number');
+    }
     if (balance <= 0) {
       log.info('No USDC balance in Futures wallet, skipping transfer');
       return true;

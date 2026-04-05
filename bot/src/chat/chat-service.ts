@@ -9,6 +9,10 @@ import { getConfig } from '../config.js';
 import { ChatStore } from './store.js';
 import { CHAT_SYSTEM_PROMPT } from './prompt.js';
 import { CHAT_TOOLS } from './tools.js';
+import {
+  sanitizeAdvisorHistoryInput,
+  sanitizeBacktestInput,
+} from './tool-input.js';
 import type { ChatConfig, ChatMessage } from './types.js';
 import { createChildLogger } from '../utils/logger.js';
 
@@ -34,6 +38,7 @@ export class ChatService {
   private deps: ChatServiceDeps;
   private backtestRunner: BacktestRunner | null = null;
   private readonly clientRateLimit = new Map<string, number[]>();
+  private backtestInFlight = false;
 
   constructor(deps: ChatServiceDeps, db: Database.Database, config?: Partial<ChatConfig>) {
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -292,11 +297,18 @@ export class ChatService {
         if (!this.backtestRunner) {
           return { error: 'Backtest runner not available' };
         }
+        if (this.backtestInFlight) {
+          return { error: 'Another backtest is already running. Try again shortly.' };
+        }
         try {
-          return await this.backtestRunner(input);
+          const sanitizedInput = sanitizeBacktestInput(input);
+          this.backtestInFlight = true;
+          return await this.backtestRunner(sanitizedInput);
         } catch (err) {
           log.error({ error: (err as Error).message }, 'Backtest execution failed');
           return { error: `Backtest failed: ${(err as Error).message}` };
+        } finally {
+          this.backtestInFlight = false;
         }
       }
 
@@ -304,8 +316,7 @@ export class ChatService {
         if (!this.deps.advisorStore) {
           return { recommendations: [], stats: null, enabled: false };
         }
-        const limit = (input['limit'] as number) ?? 10;
-        const category = input['category'] as string | undefined;
+        const { limit, category } = sanitizeAdvisorHistoryInput(input);
         const recs = category
           ? this.deps.advisorStore.getByCategory(category, limit)
           : this.deps.advisorStore.getRecent(limit);

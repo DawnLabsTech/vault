@@ -76,6 +76,10 @@ describe('DnExecutor', () => {
   // ── Entry flow ──────────────────────────────────────────────────────────
 
   describe('startEntry', () => {
+    it('should reject a non-positive entry amount', async () => {
+      await expect(executor.startEntry(0)).rejects.toThrow('Entry amount must be a positive finite number');
+    });
+
     it('should split USDC equally into margin and long amounts', async () => {
       await executor.startEntry(1000);
       const state = executor.getState();
@@ -156,11 +160,43 @@ describe('DnExecutor', () => {
       expect(connectors).not.toHaveProperty('withdrawSolFromBinance');
       expect(connectors).not.toHaveProperty('waitForSolWithdrawal');
     });
+
+    it('should fail closed when SOL price is invalid', async () => {
+      const failConnectors = createMockConnectors({
+        getSolPrice: vi.fn().mockResolvedValue(0),
+      });
+      const failExecutor = new DnExecutor(
+        createMockConfig(),
+        failConnectors,
+        'SoLaNaAdDr3ss',
+      );
+
+      const state = await failExecutor.startEntry(1000);
+
+      expect(state.currentStep).toBe(DnStep.PARTIAL_ERROR);
+      expect(state.error).toContain('SOL price must be a positive finite number');
+      expect(failConnectors.swapUsdcToDawnSol).not.toHaveBeenCalled();
+      expect(failConnectors.openPerpShort).not.toHaveBeenCalled();
+    });
   });
 
   // ── Exit flow ───────────────────────────────────────────────────────────
 
   describe('startExit', () => {
+    it('should no-op when no DN position is active', async () => {
+      const idleConnectors = createMockConnectors();
+      const idleExecutor = new DnExecutor(
+        createMockConfig(),
+        idleConnectors,
+        'SoLaNaAdDr3ss',
+      );
+      const state = await idleExecutor.startExit();
+
+      expect(state.currentStep).toBe(DnStep.IDLE);
+      expect(idleConnectors.closePerpShort).not.toHaveBeenCalled();
+      expect(idleConnectors.swapSolToUsdc).not.toHaveBeenCalled();
+    });
+
     beforeEach(async () => {
       // Enter first so we have a position
       await executor.startEntry(1000);
@@ -211,6 +247,17 @@ describe('DnExecutor', () => {
       expect(actions).toContain('dn_exit_transfer_futures_to_spot');
       expect(actions).toContain('dn_exit_swap_sol_usdc');
       expect(actions).toContain('dn_exit_deposit_lending');
+    });
+
+    it('should fail closed when futures balance is invalid', async () => {
+      (connectors.getFuturesUsdcBalance as ReturnType<typeof vi.fn>).mockResolvedValue(Number.NaN);
+
+      const state = await executor.startExit();
+
+      expect(state.currentStep).toBe(DnStep.PARTIAL_ERROR);
+      expect(state.error).toContain('Futures wallet balance must be a finite number');
+      expect(connectors.transferFuturesToSpot).not.toHaveBeenCalled();
+      expect(connectors.depositToLending).not.toHaveBeenCalled();
     });
   });
 
