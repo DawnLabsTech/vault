@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import { createChildLogger } from '../utils/logger.js';
 import { getLatestSnapshot, getSnapshots } from '../measurement/snapshots.js';
@@ -12,10 +13,19 @@ import type { MarketScanner } from '../core/market-scanner.js';
 import type { PerpExchange } from '../types.js';
 import type { AdvisorStore } from '../advisor/store.js';
 import type { ChatService } from '../chat/chat-service.js';
+import {
+  clampInteger,
+  getClientIdentifier,
+  getCorsOrigin,
+  isValidBearerToken,
+  normalizeSessionId,
+} from './security.js';
 
 const log = createChildLogger('api');
 
 const DEFAULT_DAWNSOL_APY = 0.07; // 7% default until enough data
+const MAX_CHAT_BODY_BYTES = 16_384;
+const MAX_CHAT_MESSAGE_CHARS = 2_000;
 
 export class ApiServer {
   private server: ReturnType<typeof createServer> | null = null;
@@ -65,9 +75,27 @@ export class ApiServer {
         return;
       }
 
-      // Auth check — require token in production
-      const authHeader = req.headers.authorization;
-      const queryToken = healthUrl.searchParams.get('token');
+      const allowedOrigin = getCorsOrigin(
+        req.headers,
+        process.env.API_ALLOWED_ORIGIN?.trim() ?? '',
+      );
+      if (allowedOrigin) {
+        this.applyCors(res, allowedOrigin);
+      }
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+
+      if (req.method === 'OPTIONS') {
+        if (!allowedOrigin) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Origin not allowed' }));
+          return;
+        }
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      // Auth check — require bearer token in production
       const expectedAuth = process.env.API_AUTH_TOKEN;
       if (!expectedAuth && process.env.NODE_ENV === 'production') {
         log.error('API_AUTH_TOKEN not set in production — rejecting all requests');
@@ -75,20 +103,9 @@ export class ApiServer {
         res.end(JSON.stringify({ error: 'Server misconfigured' }));
         return;
       }
-      if (expectedAuth && authHeader !== `Bearer ${expectedAuth}` && queryToken !== expectedAuth) {
+      if (expectedAuth && !isValidBearerToken(req.headers.authorization, expectedAuth)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized' }));
-        return;
-      }
-
-      // CORS headers
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-
-      if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
         return;
       }
 
@@ -153,7 +170,7 @@ export class ApiServer {
       }
 
       case '/api/events': {
-        const limit = parseInt(url.searchParams.get('limit') || '100');
+        const limit = clampInteger(url.searchParams.get('limit'), 100, 1, 500);
         const type = url.searchParams.get('type') || undefined;
         const events = getEvents({ limit, type: type as any });
         this.sendJson(res, events);
@@ -161,7 +178,7 @@ export class ApiServer {
       }
 
       case '/api/snapshots': {
-        const limit = parseInt(url.searchParams.get('limit') || '100');
+        const limit = clampInteger(url.searchParams.get('limit'), 100, 1, 500);
         const from = url.searchParams.get('from') || undefined;
         const to = url.searchParams.get('to') || undefined;
         const snapshots = getSnapshots({ from, to, limit });
@@ -170,14 +187,14 @@ export class ApiServer {
       }
 
       case '/api/fr': {
-        const limit = parseInt(url.searchParams.get('limit') || '168'); // 7 days * 24h
+        const limit = clampInteger(url.searchParams.get('limit'), 168, 1, 1_000);
         const history = this.frMonitor?.getFrHistory(limit) || [];
         this.sendJson(res, history);
         break;
       }
 
       case '/api/fr-history': {
-        const months = parseInt(url.searchParams.get('months') || '3');
+        const months = clampInteger(url.searchParams.get('months'), 3, 1, 12);
         const frHistory = await this.fetchFrHistory(months);
         this.sendJson(res, frHistory);
         break;
@@ -201,7 +218,7 @@ export class ApiServer {
       }
 
       case '/api/advisor': {
-        const limit = parseInt(url.searchParams.get('limit') || '50');
+        const limit = clampInteger(url.searchParams.get('limit'), 50, 1, 100);
         const category = url.searchParams.get('category') || undefined;
         if (!this.advisorStore) {
           this.sendJson(res, { recommendations: [], stats: null, enabled: false });
@@ -434,13 +451,17 @@ export class ApiServer {
       return;
     }
 
-    // Read POST body
-    const body = await new Promise<string>((resolve, reject) => {
-      let data = '';
-      req.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-      req.on('end', () => resolve(data));
-      req.on('error', reject);
-    });
+    let body: string;
+    try {
+      body = await this.readRequestBody(req, MAX_CHAT_BODY_BYTES);
+    } catch (err) {
+      const code = (err as Error & { code?: string }).code;
+      const status = code === 'PAYLOAD_TOO_LARGE' ? 413 : 400;
+      const message = code === 'PAYLOAD_TOO_LARGE' ? 'Request body too large' : 'Failed to read request body';
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: message }));
+      return;
+    }
 
     let parsed: { message?: string; sessionId?: string };
     try {
@@ -451,25 +472,38 @@ export class ApiServer {
       return;
     }
 
-    const message = parsed.message;
+    const message = parsed.message?.trim();
     if (!message || typeof message !== 'string') {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Missing message field' }));
       return;
     }
+    if (message.length > MAX_CHAT_MESSAGE_CHARS) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Message too long' }));
+      return;
+    }
 
-    const sessionId = parsed.sessionId || 'default';
+    const sessionId = parsed.sessionId === undefined
+      ? randomUUID()
+      : normalizeSessionId(parsed.sessionId);
+    if (!sessionId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid sessionId' }));
+      return;
+    }
+    const clientId = getClientIdentifier(req.headers, req.socket.remoteAddress);
 
     // SSE headers
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-store',
       'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no',
     });
 
     try {
-      for await (const chunk of this.chatService.streamChat(message, sessionId)) {
+      for await (const chunk of this.chatService.streamChat(message, sessionId, clientId)) {
         res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
       }
       res.write('data: [DONE]\n\n');
@@ -482,8 +516,40 @@ export class ApiServer {
   }
 
   private sendJson(res: ServerResponse, data: unknown): void {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    });
     res.end(JSON.stringify(data, null, 2));
+  }
+
+  private applyCors(res: ServerResponse, origin: string): void {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Vary', 'Origin');
+  }
+
+  private async readRequestBody(req: IncomingMessage, maxBytes: number): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      let totalBytes = 0;
+      const chunks: string[] = [];
+
+      req.on('data', (chunk: Buffer) => {
+        totalBytes += chunk.length;
+        if (totalBytes > maxBytes) {
+          const err = new Error('Request body too large') as Error & { code?: string };
+          err.code = 'PAYLOAD_TOO_LARGE';
+          reject(err);
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk.toString('utf8'));
+      });
+
+      req.on('end', () => resolve(chunks.join('')));
+      req.on('error', reject);
+    });
   }
 
   private getDashboardHtml(): string {

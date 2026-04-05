@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
-    "@drift-labs/sdk": "^2.156.0",
     "@kamino-finance/klend-sdk": "^7.3.20",
     "@solana/web3.js": "^1.98.4",
     "better-sqlite3": "^11.8.1",

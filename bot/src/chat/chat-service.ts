@@ -33,6 +33,7 @@ export class ChatService {
   private config: ChatConfig;
   private deps: ChatServiceDeps;
   private backtestRunner: BacktestRunner | null = null;
+  private readonly clientRateLimit = new Map<string, number[]>();
 
   constructor(deps: ChatServiceDeps, db: Database.Database, config?: Partial<ChatConfig>) {
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -52,14 +53,27 @@ export class ChatService {
     this.backtestRunner = runner;
   }
 
-  async *streamChat(message: string, sessionId: string = 'default'): AsyncGenerator<string> {
-    // Rate limit
-    const oneHourAgo = Date.now() - 3_600_000;
+  async *streamChat(
+    message: string,
+    sessionId: string = 'default',
+    clientId: string = 'anonymous',
+  ): AsyncGenerator<string> {
+    const now = Date.now();
+    const oneHourAgo = now - 3_600_000;
+
+    // Rate limit by client as well as session to make session rotation less useful.
+    const recentClientCount = this.getRecentClientCount(clientId, oneHourAgo);
+    if (recentClientCount >= this.config.maxMessagesPerHour) {
+      yield 'Rate limit reached. Please wait before sending more messages.';
+      return;
+    }
+
     const recentCount = this.store.countRecent(sessionId, oneHourAgo);
     if (recentCount >= this.config.maxMessagesPerHour) {
       yield 'Rate limit reached. Please wait before sending more messages.';
       return;
     }
+    this.recordClientRequest(clientId, now, oneHourAgo);
 
     // Save user message
     const userMsg: ChatMessage = {
@@ -67,7 +81,7 @@ export class ChatService {
       sessionId,
       role: 'user',
       content: message,
-      timestamp: Date.now(),
+      timestamp: now,
     };
     this.store.save(userMsg);
 
@@ -140,6 +154,24 @@ export class ChatService {
       log.error({ error: (err as Error).message }, 'Chat stream error');
       yield '\n\n[Error generating response]';
     }
+  }
+
+  private getRecentClientCount(clientId: string, cutoff: number): number {
+    const timestamps = this.clientRateLimit.get(clientId) ?? [];
+    const recent = timestamps.filter((ts) => ts >= cutoff);
+    if (recent.length > 0) {
+      this.clientRateLimit.set(clientId, recent);
+    } else {
+      this.clientRateLimit.delete(clientId);
+    }
+    return recent.length;
+  }
+
+  private recordClientRequest(clientId: string, timestamp: number, cutoff: number): void {
+    const timestamps = this.clientRateLimit.get(clientId) ?? [];
+    const recent = timestamps.filter((ts) => ts >= cutoff);
+    recent.push(timestamp);
+    this.clientRateLimit.set(clientId, recent);
   }
 
   private async *runConversation(

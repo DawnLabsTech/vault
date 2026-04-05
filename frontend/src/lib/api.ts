@@ -7,7 +7,7 @@ export async function apiFetch<T>(path: string, params?: Record<string, string>)
       url.searchParams.set(key, value);
     }
   }
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), { cache: 'no-store' });
   if (!res.ok) {
     throw new Error(`API error: ${res.status} ${res.statusText}`);
   }

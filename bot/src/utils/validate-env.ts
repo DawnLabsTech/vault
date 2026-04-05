@@ -64,7 +64,7 @@ const ENV_VARS: EnvVar[] = [
   },
   {
     name: 'API_AUTH_TOKEN',
-    required: false,
+    required: () => process.env.NODE_ENV === 'production',
     sensitive: true,
   },
   {
@@ -105,7 +105,7 @@ export function validateEnv(): void {
   }
 
   // Security warnings
-  if (!process.env.API_AUTH_TOKEN) {
+  if (!process.env.API_AUTH_TOKEN && process.env.NODE_ENV !== 'production') {
     log.warn('API_AUTH_TOKEN not set — monitoring API will be publicly accessible');
   }
 

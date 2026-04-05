@@ -11,12 +11,8 @@ export function useFr(limit = 504) {
   );
 }
 
-const BINANCE_FAPI = 'https://fapi.binance.com';
-
 async function fetchBinanceFrHistory(months: number): Promise<FundingRateData[]> {
-  const startTime = Date.now() - months * 30 * 24 * 60 * 60 * 1000;
-  const url = `${BINANCE_FAPI}/fapi/v1/fundingRate?symbol=SOLUSDC&startTime=${startTime}&limit=1000`;
-  const res = await fetch(url);
+  const res = await fetch(`/api/fr-history?months=${months}`, { cache: 'no-store' });
   if (!res.ok) throw new Error('Failed to fetch FR history from Binance');
   const data = await res.json();
   return (data as any[]).map((d) => ({

@@ -27,8 +27,14 @@ The frontend expects the bot API to be reachable at `http://localhost:3000` unle
 Relevant environment variables:
 
 - `BOT_API_URL`: upstream bot API base URL. Default: `http://localhost:3000`
-- `BOT_API_TOKEN`: bearer token sent from the frontend proxy to the bot API
-- `FRONTEND_API_SECRET`: optional bearer token required by the frontend proxy itself
+- `BOT_API_TOKEN`: bearer token sent from the frontend proxy to the bot API. In production this should usually match `API_AUTH_TOKEN`.
+- `FRONTEND_API_SECRET`: optional dashboard/proxy protection secret. When set, the frontend requires Basic auth (`vault:<secret>`) or `Authorization: Bearer <secret>`.
+
+## Security Notes
+
+- `/api/proxy/*` forwards only a fixed allowlist of bot endpoints.
+- Chat requests forward client IP context so the bot can enforce per-client rate limits.
+- Funding-rate history is fetched through the local `/api/fr-history` route instead of directly from the browser to Binance.
 
 ## Main Views
 
