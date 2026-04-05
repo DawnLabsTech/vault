@@ -111,7 +111,10 @@ export function getSnapshots(opts: GetSnapshotsOptions): PortfolioSnapshot[] {
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const limitClause = opts.limit ? `LIMIT ${opts.limit}` : '';
+  if (opts.limit) {
+    params['limit'] = opts.limit;
+  }
+  const limitClause = opts.limit ? 'LIMIT @limit' : '';
 
   const sql = `SELECT * FROM snapshots ${where} ORDER BY timestamp ASC ${limitClause}`;
   const rows = getDb().prepare(sql).all(params) as Record<string, unknown>[];

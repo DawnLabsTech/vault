@@ -68,12 +68,17 @@ export function useChat() {
           if (data === '[DONE]') continue;
 
           try {
-            const parsed = JSON.parse(data) as { text?: string; error?: string };
-            if (parsed.text) {
+            const parsed: unknown = JSON.parse(data);
+            if (
+              typeof parsed !== 'object' || parsed === null ||
+              (typeof (parsed as Record<string, unknown>).text !== 'string')
+            ) continue;
+            const text = (parsed as Record<string, unknown>).text as string;
+            if (text) {
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
-                    ? { ...m, content: m.content + parsed.text }
+                    ? { ...m, content: m.content + text }
                     : m,
                 ),
               );

@@ -18,7 +18,11 @@ import {
   getClientIdentifier,
   getCorsOrigin,
   isValidBearerToken,
+  isValidAdvisorCategory,
+  isValidDateString,
+  isValidEventType,
   normalizeSessionId,
+  RateLimiter,
 } from './security.js';
 
 const log = createChildLogger('api');
@@ -26,6 +30,13 @@ const log = createChildLogger('api');
 const DEFAULT_DAWNSOL_APY = 0.07; // 7% default until enough data
 const MAX_CHAT_BODY_BYTES = 16_384;
 const MAX_CHAT_MESSAGE_CHARS = 2_000;
+
+// Rate limiters: 60 GET/min and 10 POST/min per client
+const getLimit = new RateLimiter(60_000, 60);
+const postLimit = new RateLimiter(60_000, 10);
+
+// Prune expired rate-limit entries every 5 minutes
+setInterval(() => { getLimit.prune(); postLimit.prune(); }, 300_000).unref();
 
 export class ApiServer {
   private server: ReturnType<typeof createServer> | null = null;
@@ -109,6 +120,27 @@ export class ApiServer {
         return;
       }
 
+      // Rate limiting
+      const clientId = getClientIdentifier(req.headers, req.socket.remoteAddress);
+      const limiter = req.method === 'POST' ? postLimit : getLimit;
+      if (!limiter.allow(clientId)) {
+        const retryAfter = limiter.retryAfter(clientId);
+        res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) });
+        res.end(JSON.stringify({ error: 'Too many requests' }));
+        return;
+      }
+
+      // Reject cross-origin requests when no allowed origin is configured in production
+      if (
+        process.env.NODE_ENV === 'production' &&
+        !allowedOrigin &&
+        req.headers.origin
+      ) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Cross-origin requests not permitted' }));
+        return;
+      }
+
       try {
         // POST /api/chat — SSE streaming, handle separately
         const reqUrl = new URL(req.url || '/', `http://${req.headers.host}`);
@@ -156,8 +188,15 @@ export class ApiServer {
       }
 
       case '/api/pnl': {
-        const from = url.searchParams.get('from') || '2020-01-01';
-        const to = url.searchParams.get('to') || new Date().toISOString().split('T')[0]!;
+        const rawFrom = url.searchParams.get('from');
+        const rawTo = url.searchParams.get('to');
+        if ((rawFrom && !isValidDateString(rawFrom)) || (rawTo && !isValidDateString(rawTo))) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid date format (expected YYYY-MM-DD)' }));
+          break;
+        }
+        const from = rawFrom || '2020-01-01';
+        const to = rawTo || new Date().toISOString().split('T')[0]!;
         const pnl = getDailyPnlRange(from, to);
         this.sendJson(res, pnl);
         break;
@@ -171,17 +210,27 @@ export class ApiServer {
 
       case '/api/events': {
         const limit = clampInteger(url.searchParams.get('limit'), 100, 1, 500);
-        const type = url.searchParams.get('type') || undefined;
-        const events = getEvents({ limit, type: type as any });
+        const rawType = url.searchParams.get('type');
+        if (rawType && !isValidEventType(rawType)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid event type' }));
+          break;
+        }
+        const events = getEvents({ limit, type: rawType as any });
         this.sendJson(res, events);
         break;
       }
 
       case '/api/snapshots': {
         const limit = clampInteger(url.searchParams.get('limit'), 100, 1, 500);
-        const from = url.searchParams.get('from') || undefined;
-        const to = url.searchParams.get('to') || undefined;
-        const snapshots = getSnapshots({ from, to, limit });
+        const rawFrom = url.searchParams.get('from');
+        const rawTo = url.searchParams.get('to');
+        if ((rawFrom && !isValidDateString(rawFrom)) || (rawTo && !isValidDateString(rawTo))) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid date format (expected YYYY-MM-DD)' }));
+          break;
+        }
+        const snapshots = getSnapshots({ from: rawFrom || undefined, to: rawTo || undefined, limit });
         this.sendJson(res, snapshots);
         break;
       }
@@ -219,7 +268,13 @@ export class ApiServer {
 
       case '/api/advisor': {
         const limit = clampInteger(url.searchParams.get('limit'), 50, 1, 100);
-        const category = url.searchParams.get('category') || undefined;
+        const rawCategory = url.searchParams.get('category');
+        if (rawCategory && !isValidAdvisorCategory(rawCategory)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid category' }));
+          break;
+        }
+        const category = rawCategory || undefined;
         if (!this.advisorStore) {
           this.sendJson(res, { recommendations: [], stats: null, enabled: false });
           break;

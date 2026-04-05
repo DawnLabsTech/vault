@@ -446,6 +446,24 @@ export class DnExecutor {
     }
 
     if (errors.length > 0) {
+      // Record alert for partial leg failure — position may be unbalanced
+      const completedLegs = [];
+      if (swapSettled.status === 'fulfilled' && swapSettled.value) completedLegs.push('swap');
+      if (shortSettled.status === 'fulfilled' && shortSettled.value) completedLegs.push('short');
+      this.events.push({
+        timestamp: new Date().toISOString(),
+        eventType: EventType.ALERT,
+        amount: 0,
+        asset: 'SOL',
+        metadata: {
+          action: 'dn_partial_leg_failure',
+          completedLegs,
+          failedLegs: errors,
+          dawnsolAmount: this.state.dawnsolAmount,
+          perpSize: this.state.perpSize,
+        },
+      });
+      log.error({ completedLegs, errors }, 'DN partial leg failure — position may be delta-unbalanced');
       throw new Error(errors.join('; '));
     }
 
@@ -548,6 +566,23 @@ export class DnExecutor {
     }
 
     if (errors.length > 0) {
+      const completedLegs = [];
+      if (closeSettled.status === 'fulfilled' && closeSettled.value) completedLegs.push('close_short');
+      if (swapSettled.status === 'fulfilled' && swapSettled.value) completedLegs.push('swap_dawnsol');
+      this.events.push({
+        timestamp: new Date().toISOString(),
+        eventType: EventType.ALERT,
+        amount: 0,
+        asset: 'SOL',
+        metadata: {
+          action: 'dn_partial_leg_failure_close',
+          completedLegs,
+          failedLegs: errors,
+          remainingPerpSize: this.state.perpSize,
+          remainingDawnsolAmount: this.state.dawnsolAmount,
+        },
+      });
+      log.error({ completedLegs, errors }, 'DN close partial leg failure — position may be delta-unbalanced');
       throw new Error(errors.join('; '));
     }
 

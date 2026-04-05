@@ -138,11 +138,34 @@ class ConfigManager extends EventEmitter {
     return this.config;
   }
 
+  private validateConfig(config: VaultConfig): string[] {
+    const errors: string[] = [];
+    if (config.risk.dailyLossLimitPct <= 0 || config.risk.dailyLossLimitPct > 100) {
+      errors.push(`risk.dailyLossLimitPct must be in (0, 100], got ${config.risk.dailyLossLimitPct}`);
+    }
+    if (!Number.isFinite(config.risk.maxPositionCapUsd) || config.risk.maxPositionCapUsd <= 0) {
+      errors.push(`risk.maxPositionCapUsd must be a positive finite number, got ${config.risk.maxPositionCapUsd}`);
+    }
+    if (config.general.tickIntervalMs < 1000) {
+      errors.push(`general.tickIntervalMs must be >= 1000, got ${config.general.tickIntervalMs}`);
+    }
+    if (config.thresholds.dnAllocationMax <= 0 || config.thresholds.dnAllocationMax > 1) {
+      errors.push(`thresholds.dnAllocationMax must be in (0, 1], got ${config.thresholds.dnAllocationMax}`);
+    }
+    return errors;
+  }
+
   startWatching(): void {
     this.watcher = watch(CONFIG_PATH, { ignoreInitial: true });
     this.watcher.on('change', () => {
+      const candidate = this.loadConfig();
+      const validationErrors = this.validateConfig(candidate);
+      if (validationErrors.length > 0) {
+        console.error('Config reload rejected — validation errors:', validationErrors);
+        return;
+      }
       const oldConfig = this.config;
-      this.config = this.loadConfig();
+      this.config = candidate;
       this.emit('change', this.config, oldConfig);
     });
   }

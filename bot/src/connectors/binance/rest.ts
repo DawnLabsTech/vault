@@ -36,12 +36,20 @@ interface RateLimitState {
   lastResetTime: number;
 }
 
+// Circuit breaker thresholds
+const RATE_LIMIT_SOFT_THRESHOLD = 2200; // 92% of 2400 — start delaying
+const RATE_LIMIT_HARD_THRESHOLD = 2350; // 98% of 2400 — reject immediately
+const CIRCUIT_OPEN_DURATION_MS = 30_000;
+const CONSECUTIVE_FAILURE_LIMIT = 5;
+
 export class BinanceRestClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
   private readonly futuresBaseUrl: string;
   private readonly spotBaseUrl: string;
   private readonly rateLimit: RateLimitState = { usedWeight1m: 0, lastResetTime: Date.now() };
+  private consecutiveFailures = 0;
+  private circuitOpenUntil = 0;
 
   constructor(apiKey: string, apiSecret: string, testnet = false) {
     this.apiKey = apiKey;
@@ -245,6 +253,25 @@ export class BinanceRestClient {
     params: Record<string, string>,
     apiType: 'futures' | 'spot',
   ): Promise<T> {
+    // Circuit breaker — reject while circuit is open
+    if (Date.now() < this.circuitOpenUntil) {
+      const remainMs = this.circuitOpenUntil - Date.now();
+      throw new Error(`Binance circuit breaker open — retry in ${Math.ceil(remainMs / 1000)}s`);
+    }
+
+    // Rate-limit backpressure
+    const elapsed = Date.now() - this.rateLimit.lastResetTime;
+    const weight = elapsed < 60_000 ? this.rateLimit.usedWeight1m : 0;
+    if (weight > RATE_LIMIT_HARD_THRESHOLD) {
+      log.error({ usedWeight: weight }, 'Binance rate limit exceeded (>98%) — rejecting request');
+      throw new Error('Binance rate limit exceeded — request rejected');
+    }
+    if (weight > RATE_LIMIT_SOFT_THRESHOLD) {
+      const delayMs = (weight - RATE_LIMIT_SOFT_THRESHOLD) * 25;
+      log.warn({ usedWeight: weight, delayMs }, 'Binance rate limit high (>92%) — throttling');
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+
     const baseUrl = apiType === 'futures' ? this.futuresBaseUrl : this.spotBaseUrl;
     const signed = this.signParams(params);
 
@@ -286,9 +313,21 @@ export class BinanceRestClient {
         : `Binance HTTP ${response.status}: ${text.slice(0, 200)}`;
 
       log.error({ method, path, status: response.status, code: apiError?.code, msg: apiError?.msg }, errMsg);
+
+      // Track consecutive non-4xx failures for circuit breaker
+      if (response.status >= 500 || response.status === 429) {
+        this.consecutiveFailures++;
+        if (this.consecutiveFailures >= CONSECUTIVE_FAILURE_LIMIT) {
+          this.circuitOpenUntil = Date.now() + CIRCUIT_OPEN_DURATION_MS;
+          log.error({ consecutiveFailures: this.consecutiveFailures }, 'Binance circuit breaker OPEN for 30s');
+        }
+      }
+
       throw new Error(errMsg);
     }
 
+    // Reset consecutive failure counter on success
+    this.consecutiveFailures = 0;
     return JSON.parse(text) as T;
   }
 

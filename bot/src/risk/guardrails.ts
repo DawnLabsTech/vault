@@ -1,4 +1,4 @@
-import { existsSync } from 'fs';
+import { readFileSync } from 'fs';
 import { createChildLogger } from '../utils/logger.js';
 import { round } from '../utils/math.js';
 
@@ -129,11 +129,13 @@ export function checkPositionDivergence(
  * Touch /tmp/vault-kill to trigger an emergency shutdown.
  */
 export function checkKillSwitch(path: string = KILL_SWITCH_PATH): boolean {
-  const killed = existsSync(path);
-  if (killed) {
+  try {
+    readFileSync(path, 'utf8');
     log.error(`Kill switch activated — ${path} exists`);
+    return true;
+  } catch {
+    return false;
   }
-  return killed;
 }
 
 /**

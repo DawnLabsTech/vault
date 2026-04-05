@@ -7,8 +7,10 @@ export const logger = pino({
     paths: [
       'apiKey', 'apiSecret', 'secret', 'privateKey',
       'token', 'authorization', 'password',
+      'rpcUrl', 'rpcEndpoint', 'botToken',
       '*.apiKey', '*.apiSecret', '*.secret', '*.privateKey',
       '*.token', '*.authorization', '*.password',
+      '*.rpcUrl', '*.rpcEndpoint', '*.botToken',
     ],
     censor: '[REDACTED]',
   },

@@ -25,6 +25,16 @@ const ALLOWED_GET_PATHS = new Set([
 
 const ALLOWED_POST_PATHS = new Set(['chat']);
 
+// Allowlisted query parameter names per GET endpoint
+const ALLOWED_PARAMS: Record<string, Set<string>> = {
+  pnl: new Set(['from', 'to']),
+  events: new Set(['limit', 'type']),
+  snapshots: new Set(['from', 'to', 'limit']),
+  fr: new Set(['limit']),
+  'fr-history': new Set(['months']),
+  advisor: new Set(['limit', 'category']),
+};
+
 function checkProxyConfig(): NextResponse | null {
   if (process.env.NODE_ENV === 'production' && !BOT_API_TOKEN) {
     return NextResponse.json(
@@ -49,6 +59,19 @@ function resolveEndpoint(path: string[], method: 'GET' | 'POST'): string | null 
   const endpoint = path.join('/');
   const allowlist = method === 'GET' ? ALLOWED_GET_PATHS : ALLOWED_POST_PATHS;
   return allowlist.has(endpoint) ? endpoint : null;
+}
+
+function filterSearchParams(endpoint: string, params: URLSearchParams): string {
+  const allowed = ALLOWED_PARAMS[endpoint];
+  if (!allowed) return '';
+  const filtered = new URLSearchParams();
+  for (const [key, value] of params) {
+    if (allowed.has(key)) {
+      filtered.set(key, value);
+    }
+  }
+  const qs = filtered.toString();
+  return qs;
 }
 
 function buildUrl(endpoint: string, searchParams?: string): string {
@@ -85,7 +108,8 @@ export async function GET(
   if (!endpoint) {
     return NextResponse.json({ error: 'Endpoint not allowed' }, { status: 404 });
   }
-  const url = buildUrl(endpoint, request.nextUrl.searchParams.toString());
+  const filteredParams = filterSearchParams(endpoint, request.nextUrl.searchParams);
+  const url = buildUrl(endpoint, filteredParams);
 
   try {
     const res = await fetch(url, {
