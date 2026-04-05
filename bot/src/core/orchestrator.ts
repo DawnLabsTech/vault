@@ -24,6 +24,7 @@ import type { KaminoLoopLending } from '../connectors/defi/kamino-loop.js';
 import type { KaminoMultiplyLending } from '../connectors/defi/kamino-multiply.js';
 import type { MarketScanner } from './market-scanner.js';
 import { ProtocolCircuitBreaker } from '../risk/protocol-circuit-breaker.js';
+import type { Advisor } from '../advisor/advisor.js';
 
 const log = createChildLogger('orchestrator');
 
@@ -44,6 +45,7 @@ export interface OrchestratorDeps {
   kaminoMultiplyAdapters?: KaminoMultiplyLending[];
   marketScanner?: MarketScanner | null;
   circuitBreaker?: ProtocolCircuitBreaker | null;
+  advisor?: Advisor | null;
 }
 
 interface PersistedState {
@@ -176,6 +178,19 @@ export class Orchestrator {
         await this.claimKaminoMultiplyRewards();
       });
     }
+
+    // AI Advisor — periodic evaluation (default 6h)
+    if (this.deps.advisor) {
+      const advisorInterval = 21_600_000; // 6h
+      this.scheduler.register('ai-advisor', advisorInterval, async () => {
+        await this.runAdvisor();
+      });
+    }
+
+    // Status digest — every 12 hours
+    this.scheduler.register('status-digest', 43_200_000, async () => {
+      await this.sendStatusDigest();
+    });
   }
 
   private setupConfigReload(): void {
@@ -521,12 +536,23 @@ export class Orchestrator {
       }
     }
 
+    // Wallet collateral tokens (e.g. ONyc stranded from partial Multiply operations)
+    let walletCollateralUsdcValue = 0;
+    if (this.deps.kaminoMultiplyAdapters) {
+      const collResults = await Promise.allSettled(
+        this.deps.kaminoMultiplyAdapters.map(a => a.getWalletCollateralUsdValue()),
+      );
+      for (const r of collResults) {
+        if (r.status === 'fulfilled') walletCollateralUsdcValue += r.value;
+      }
+    }
+
     // dawnSOL (from DN executor state)
     const dnState = this.deps.dnExecutor.getState();
     const dawnsolBalance = dnState.dawnsolAmount;
     const dawnsolUsdcValue = dawnsolBalance * prices.dawnsol;
 
-    const totalNavUsdc = lendingTotal + multiplyTotal + bufferUsdcBalance + binanceUsdcBalance + dawnsolUsdcValue + binancePerpUnrealizedPnl;
+    const totalNavUsdc = lendingTotal + multiplyTotal + bufferUsdcBalance + walletCollateralUsdcValue + binanceUsdcBalance + dawnsolUsdcValue + binancePerpUnrealizedPnl;
 
     return {
       timestamp: new Date().toISOString(),
@@ -1079,6 +1105,65 @@ export class Orchestrator {
       }
     } catch (err) {
       log.error({ error: (err as Error).message }, 'Circuit breaker check failed');
+    }
+  }
+
+  private async sendStatusDigest(): Promise<void> {
+    try {
+      const snapshot = await this.getOrBuildSnapshot();
+      const config = getConfig();
+      const frLatest = this.deps.frMonitor.getLatestAnnualized();
+      const fr3d = this.deps.frMonitor.getAverageAnnualized(3);
+
+      // Multiply health rates
+      const healthLines: string[] = [];
+      if (this.deps.kaminoMultiplyAdapters) {
+        for (const adapter of this.deps.kaminoMultiplyAdapters) {
+          try {
+            const health = await adapter.getHealthRate();
+            const cfg = adapter.getMultiplyConfig();
+            healthLines.push(`  ${cfg.label}: HR ${health.toFixed(3)}`);
+          } catch { /* skip */ }
+        }
+      }
+
+      const lines = [
+        `*State:* ${this.botState}`,
+        `*NAV:* $${snapshot.totalNavUsdc.toFixed(2)}`,
+        `*Multiply:* $${snapshot.multiplyBalance.toFixed(2)}`,
+        `*Lending:* $${snapshot.lendingBalance.toFixed(2)}`,
+        `*Buffer:* $${snapshot.bufferUsdcBalance.toFixed(2)}`,
+        '',
+        `*FR:* ${frLatest.toFixed(1)}% (3d avg: ${fr3d.toFixed(1)}%)`,
+        `*SOL:* $${snapshot.solPrice.toFixed(2)}`,
+      ];
+
+      if (healthLines.length > 0) {
+        lines.push('', '*Health:*', ...healthLines);
+      }
+
+      const uptime = Math.floor((Date.now() - this.startedAt) / 3_600_000);
+      lines.push('', `*Uptime:* ${uptime}h`);
+
+      await sendAlert(lines.join('\n'), 'info');
+      log.debug('Status digest sent');
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'Failed to send status digest');
+    }
+  }
+
+  private async runAdvisor(): Promise<void> {
+    if (!this.deps.advisor) return;
+    try {
+      const config = getConfig();
+      const recommendations = await this.deps.advisor.evaluate(this.botState, config);
+      if (recommendations.length > 0) {
+        log.info({ count: recommendations.length }, 'AI Advisor produced recommendations');
+      } else {
+        log.debug('AI Advisor: no recommendations');
+      }
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'AI Advisor evaluation failed');
     }
   }
 

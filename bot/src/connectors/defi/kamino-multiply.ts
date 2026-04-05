@@ -945,6 +945,45 @@ export class KaminoMultiplyLending implements LendingProtocol {
     }
   }
 
+  /**
+   * Returns the USD value of any collateral token sitting in the wallet
+   * (not yet deposited into the Multiply position). This is needed so the
+   * portfolio snapshot counts stranded collateral toward total NAV.
+   */
+  async getWalletCollateralUsdValue(): Promise<number> {
+    if (!this.rpcUrl) return 0;
+    // If inputToken == collToken, the wallet only holds collToken when something
+    // went wrong, but there is nothing to price — it's already in input units.
+    // We only need this for the case where collToken differs from inputToken
+    // (e.g. ONyc wallet balance when inputToken is USDC).
+    if (!this.needsInputSwap()) return 0;
+
+    try {
+      const { Connection, PublicKey } = await import('@solana/web3.js');
+      const conn = new Connection(this.rpcUrl, 'confirmed');
+      const tokenAccounts = await conn.getParsedTokenAccountsByOwner(
+        new PublicKey(this.walletAddress),
+        { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') },
+      );
+      const collAccount = tokenAccounts.value.find(
+        t => t.account.data.parsed.info.mint === this.cfg.collToken,
+      );
+      const collBalance = collAccount
+        ? parseFloat(collAccount.account.data.parsed.info.tokenAmount.uiAmountString)
+        : 0;
+      if (collBalance <= 0.001) return 0;
+
+      // Price via Jupiter
+      const price = await getRewardTokenPrice(this.cfg.collToken);
+      const usdValue = collBalance * price;
+      log.debug({ collBalance, price, usdValue, token: this.cfg.collToken.slice(0, 8) }, 'Wallet collateral value');
+      return usdValue;
+    } catch (err) {
+      log.warn({ error: (err as Error).message }, 'Failed to get wallet collateral USD value');
+      return 0;
+    }
+  }
+
   /** Expose config for orchestrator health monitoring */
   getMultiplyConfig(): KaminoMultiplyConfig {
     return { ...this.cfg };
