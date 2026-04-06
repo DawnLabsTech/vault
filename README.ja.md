@@ -145,6 +145,18 @@ bot/src/
 │   ├── defi/              # Kamino (Multiply/Loop/Lending), Jupiter (Swap/Lend), Onre APY
 │   ├── binance/           # REST + WebSocket クライアント（Futures）
 │   └── solana/            # RPC、ウォレット、トークン操作
+├── advisor/
+│   ├── advisor.ts         # AI Advisor: Claude API 連携、評価ループ
+│   ├── context-builder.ts # bot 状態から LLM 向けの構造化コンテキストを生成
+│   ├── prompt.ts          # システムプロンプト定義
+│   ├── store.ts           # 推奨履歴と精度統計の SQLite 保存
+│   └── types.ts           # AdvisorRecommendation, AdvisorContext 型
+├── chat/
+│   ├── chat-service.ts    # vault 状態を文脈に使うストリーミング AI チャット
+│   ├── prompt.ts          # チャット用システムプロンプトと応答ルール
+│   ├── tools.ts           # バックテスト実行、Advisor 履歴参照などのツール定義
+│   ├── store.ts           # セッション単位のチャット履歴を SQLite に保存
+│   └── types.ts           # Chat request/message/config 型
 ├── measurement/
 │   ├── snapshots.ts       # ポートフォリオ状態スナップショット（SQLite）
 │   ├── pnl.ts             # 日次 P&L 計算
@@ -173,6 +185,38 @@ bot/src/
 - アクティブな Multiply は Score `>= 75` で新規追加を止める。
 - Score `75-89` は動的な `maxPositionCap` まで縮小する。
 - Score `>= 90` は全撤退する。
+
+### AI Advisor
+
+bot の状態を定期実行 + イベント駆動で評価し、推奨を返す advisory layer。実行系ではなく、観測と提案に限定している。
+
+- コンテキスト生成 -> Claude API -> 推奨パース -> SQLite 保存 + Telegram 通知 + Dashboard 表示
+- 6 時間ごとの定期評価に加え、SOL 価格急変、リスクスコア急騰、FR レジーム変化でも再評価
+- 推奨にはカテゴリ、confidence、urgency、rule-based 判定との差分 (`override`) を持たせている
+
+### AI Chat
+
+運用者向けの AI チャット。現在の vault 状態を文脈として読み込み、ダッシュボードのフローティングウィジェットと `/api/chat` の SSE API から利用できる。
+
+主な機能:
+
+- 最新の vault 状態を会話の先頭に注入して回答する
+- UI 上でストリーミング表示する
+- セッションごとの会話履歴を SQLite に保存する
+- ユーザーの言語に合わせて日本語 / 英語で返答する
+
+チャット経由で使える追加機能:
+
+| ツール | 用途 |
+|---|---|
+| `run_backtest` | APY、FR 閾値、配分比率、期間を変えた "what if" バックテスト |
+| `get_advisor_history` | AI Advisor の直近推奨履歴と 7 日精度統計の参照 |
+
+制約:
+
+- `ANTHROPIC_API_KEY` がない場合は無効
+- 1 セッションあたり `30` メッセージ / 時間のレート制限あり
+- 売買実行はせず、読み取り系の分析とバックテストのみに限定
 
 ## 調査メモ
 

@@ -13,11 +13,14 @@ const securityHeaders = [
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
   {
     key: 'Content-Security-Policy',
-    value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https:; font-src 'self' data:; frame-ancestors 'none'",
+    value: process.env.NODE_ENV === 'development'
+      ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data: https:; font-src 'self' data:; frame-ancestors 'none'"
+      : "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: https:; font-src 'self' data:; frame-ancestors 'none'",
   },
 ];
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ['192.168.100.207'],
   async headers() {
     return [{ source: '/(.*)', headers: securityHeaders }];
   },

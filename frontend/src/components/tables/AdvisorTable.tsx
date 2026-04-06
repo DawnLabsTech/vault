@@ -66,15 +66,17 @@ export function AdvisorTable() {
             return (
               <div
                 key={id}
-                className={`rounded border cursor-pointer transition-colors ${
+                className={`rounded border transition-colors ${
                   rec.override
                     ? 'border-vault-warning/40 bg-vault-warning/5'
                     : 'border-vault-border/20 hover:border-vault-border/50'
                 }`}
-                onClick={() => toggle(id)}
               >
                 {/* Collapsed row */}
-                <div className="flex items-center gap-1.5 px-2 py-1.5">
+                <div
+                  className="flex items-center gap-1.5 px-2 py-1.5 cursor-pointer"
+                  onClick={() => toggle(id)}
+                >
                   {urgencyIcons[rec.urgency] && (
                     <span className="text-[10px]">{urgencyIcons[rec.urgency]}</span>
                   )}
@@ -97,7 +99,10 @@ export function AdvisorTable() {
 
                 {/* Expanded detail */}
                 {isOpen && (
-                  <div className="px-2 pb-2 pt-0.5 border-t border-vault-border/20">
+                  <div
+                    className="px-2 pb-2 pt-0.5 border-t border-vault-border/20 select-text"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <p className="text-[11px] text-vault-text-bright mb-1">{rec.action}</p>
                     <p className="text-[10px] text-vault-muted leading-relaxed">{rec.reasoning}</p>
                     {rec.override && rec.currentRule && (

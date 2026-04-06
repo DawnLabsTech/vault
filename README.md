@@ -151,6 +151,12 @@ bot/src/
 │   ├── prompt.ts          # System prompt definition
 │   ├── store.ts           # SQLite storage for recommendations + accuracy tracking
 │   └── types.ts           # AdvisorRecommendation, AdvisorContext types
+├── chat/
+│   ├── chat-service.ts    # Streaming AI chat with vault context + tool execution
+│   ├── prompt.ts          # Chat system prompt and response rules
+│   ├── tools.ts           # Chat tools: backtest runner, advisor history lookup
+│   ├── store.ts           # SQLite storage for per-session chat history
+│   └── types.ts           # Chat request/message/config types
 ├── measurement/
 │   ├── snapshots.ts       # Portfolio state snapshots (SQLite)
 │   ├── pnl.ts             # Daily P&L calculation
@@ -216,6 +222,30 @@ tsx scripts/run-advisor.ts --save
 ```
 
 **Dashboard:** The AI Advisor panel appears as a sticky sidebar on the monitoring dashboard, showing the latest recommendations in a compact expandable format.
+
+### AI Chat
+
+An operator-facing AI chat layer that answers questions using the current vault state and recent conversation history. It is available as a floating dashboard widget and through the `/api/chat` SSE endpoint.
+
+**Capabilities:**
+
+- Injects the latest vault context into the conversation before answering
+- Streams responses token-by-token in the UI
+- Stores per-session chat history in SQLite
+- Responds in Japanese or English based on the user's language
+
+**Built-in chat tools:**
+
+| Tool | Purpose |
+|---|---|
+| `run_backtest` | Runs scenario backtests for "what if" questions about APYs, FR thresholds, allocation ratios, and date ranges |
+| `get_advisor_history` | Retrieves recent AI Advisor recommendations plus 7-day accuracy stats |
+
+**Safeguards:**
+
+- Requires `ANTHROPIC_API_KEY`; otherwise chat stays disabled
+- Per-session rate limit: `30` user messages per hour
+- Informational only: chat can run read-only analysis and backtests, but it does not execute trades
 
 ## Research Notes
 
