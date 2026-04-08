@@ -251,7 +251,7 @@ export function computeTimeWeightedReturn(
   return twGrowth - 1;
 }
 
-function calculateDailyPnlForDate(date: string): DailyPnL {
+function calculateDailyPnlForDate(date: string, prevEndingNav?: number): DailyPnL {
   const dayStart = `${date}T00:00:00.000Z`;
   const dayEnd = `${date}T23:59:59.999Z`;
 
@@ -261,8 +261,25 @@ function calculateDailyPnlForDate(date: string): DailyPnL {
   const startSnapshot = daySnapshots[0];
   const endSnapshot = daySnapshots[daySnapshots.length - 1];
 
-  const startingNav = startSnapshot?.totalNavUsdc ?? 0;
+  // Use previous day's ending NAV to avoid losing yield that accrues in the
+  // gap between last snapshot of day N and first snapshot of day N+1 (typically
+  // ~5 min around midnight where discrete interest accrual can occur).
+  const startingNav = prevEndingNav ?? startSnapshot?.totalNavUsdc ?? 0;
   const endingNav = endSnapshot?.totalNavUsdc ?? 0;
+
+  // For time-weighted return, prepend a synthetic snapshot at prevEndingNav so
+  // that the overnight gap is included as organic yield.  The gap is typically
+  // well below the 2% jump threshold, so it's treated correctly.
+  let twSnapshots = daySnapshots;
+  if (prevEndingNav != null && daySnapshots.length > 0) {
+    const firstNav = daySnapshots[0]!.totalNavUsdc;
+    if (Math.abs(prevEndingNav - firstNav) > 1e-6) {
+      twSnapshots = [
+        { ...daySnapshots[0]!, totalNavUsdc: prevEndingNav, timestamp: dayStart },
+        ...daySnapshots,
+      ];
+    }
+  }
 
   // NAV high/low from intraday snapshots
   let navHigh = startingNav;
@@ -277,7 +294,7 @@ function calculateDailyPnlForDate(date: string): DailyPnL {
   const eventWindowStart = startSnapshot?.timestamp ?? dayStart;
   const eventWindowEnd = endSnapshot?.timestamp ?? dayEnd;
   const dayEvents = getEvents({ from: eventWindowStart, to: eventWindowEnd });
-  const netExternalFlow = estimateExternalUsdcFlow(daySnapshots, dayEvents);
+  const netExternalFlow = estimateExternalUsdcFlow(twSnapshots, dayEvents);
 
   // Revenue aggregation
   let lendingInterest = 0;
@@ -361,9 +378,9 @@ function calculateDailyPnlForDate(date: string): DailyPnL {
     ? endSnapshot.binancePerpUnrealizedPnl
     : 0;
 
-  // Daily return using time-weighted method to avoid overestimating external
-  // flows (the NAV-jump sum absorbs organic yield in jump intervals).
-  const dailyReturn = round(computeTimeWeightedReturn(daySnapshots), 8);
+  // Daily return using time-weighted method.  Uses twSnapshots which includes
+  // the previous day's ending NAV to capture overnight yield accrual.
+  const dailyReturn = round(computeTimeWeightedReturn(twSnapshots), 8);
 
   const pnl: DailyPnL = {
     date,
@@ -439,7 +456,11 @@ export function getDailyPnlRange(from: string, to: string): DailyPnL[] {
     return rows.map(rowToPnl);
   }
 
-  const computed = snapshotDates.map((date) => calculateDailyPnlForDate(date));
+  const computed: DailyPnL[] = [];
+  for (let i = 0; i < snapshotDates.length; i++) {
+    const prevEndingNav = i > 0 ? computed[i - 1]!.endingNav : undefined;
+    computed.push(calculateDailyPnlForDate(snapshotDates[i]!, prevEndingNav));
+  }
   return finalizePnlSeries(computed);
 }
 
