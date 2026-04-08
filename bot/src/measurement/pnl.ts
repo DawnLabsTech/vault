@@ -201,6 +201,56 @@ export function estimateExternalUsdcFlow(
   return round(totalExternalFlow, 6);
 }
 
+/**
+ * Compute time-weighted daily return by chaining sub-period returns separated
+ * by detected external-flow jumps.
+ *
+ * The previous approach — (endNav - startNav - estimatedFlow) / startNav —
+ * systematically underestimates returns because the NAV-jump heuristic
+ * absorbs organic yield that accrues during the same snapshot interval as an
+ * external deposit/withdrawal.
+ *
+ * The time-weighted method avoids estimating external-flow amounts entirely:
+ * it simply ends a sub-period before each jump and starts a new one after,
+ * chaining the sub-period growth factors multiplicatively.
+ */
+export function computeTimeWeightedReturn(
+  snapshots: PortfolioSnapshot[],
+): number {
+  if (snapshots.length < 2) return 0;
+
+  const startNav = snapshots[0]!.totalNavUsdc;
+  if (startNav <= 0) return 0;
+  const JUMP_THRESHOLD_USD = Math.max(startNav * 0.02, 2);
+
+  let twGrowth = 1;
+  let periodStartNav = startNav;
+
+  for (let i = 1; i < snapshots.length; i++) {
+    const prev = snapshots[i - 1]!;
+    const curr = snapshots[i]!;
+    if (prev.totalNavUsdc <= 0) continue;
+
+    const delta = curr.totalNavUsdc - prev.totalNavUsdc;
+    if (Math.abs(delta) > JUMP_THRESHOLD_USD) {
+      // Close the current sub-period at the pre-jump snapshot
+      if (periodStartNav > 0) {
+        twGrowth *= prev.totalNavUsdc / periodStartNav;
+      }
+      // Start a new sub-period from the post-jump snapshot
+      periodStartNav = curr.totalNavUsdc;
+    }
+  }
+
+  // Close the final sub-period
+  const lastNav = snapshots[snapshots.length - 1]!.totalNavUsdc;
+  if (periodStartNav > 0) {
+    twGrowth *= lastNav / periodStartNav;
+  }
+
+  return twGrowth - 1;
+}
+
 function calculateDailyPnlForDate(date: string): DailyPnL {
   const dayStart = `${date}T00:00:00.000Z`;
   const dayEnd = `${date}T23:59:59.999Z`;
@@ -311,10 +361,9 @@ function calculateDailyPnlForDate(date: string): DailyPnL {
     ? endSnapshot.binancePerpUnrealizedPnl
     : 0;
 
-  // Daily return excluding external wallet top-ups / withdrawals.
-  const dailyReturn = startingNav > 0
-    ? round((endingNav - startingNav - netExternalFlow) / startingNav, 8)
-    : 0;
+  // Daily return using time-weighted method to avoid overestimating external
+  // flows (the NAV-jump sum absorbs organic yield in jump intervals).
+  const dailyReturn = round(computeTimeWeightedReturn(daySnapshots), 8);
 
   const pnl: DailyPnL = {
     date,

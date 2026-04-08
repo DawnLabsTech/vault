@@ -183,6 +183,27 @@ describe('pnl external flow adjustments', () => {
     expect(summary.totalReturn).toBeCloseTo(1 / 150, 4);
   });
 
+  it('time-weighted return excludes deposit but captures organic yield', async () => {
+    const { computeTimeWeightedReturn } = await import('../../src/measurement/pnl.js');
+
+    // Simulate: NAV starts at 100, grows organically to 100.05, then deposit
+    // makes it jump to 150.05, then grows organically to 150.10
+    const snaps: PortfolioSnapshot[] = [
+      { timestamp: '2026-04-05T00:00:00.000Z', totalNavUsdc: 100, lendingBalance: 0, lendingBreakdown: {}, multiplyBalance: 90, multiplyBreakdown: {}, dawnsolBalance: 0, dawnsolUsdcValue: 0, bufferUsdcBalance: 10, binanceUsdcBalance: 0, binancePerpUnrealizedPnl: 0, binancePerpSize: 0, state: 'BASE_ONLY', solPrice: 100, dawnsolPrice: 100 },
+      { timestamp: '2026-04-05T06:00:00.000Z', totalNavUsdc: 100.05, lendingBalance: 0, lendingBreakdown: {}, multiplyBalance: 90, multiplyBreakdown: {}, dawnsolBalance: 0, dawnsolUsdcValue: 0, bufferUsdcBalance: 10.05, binanceUsdcBalance: 0, binancePerpUnrealizedPnl: 0, binancePerpSize: 0, state: 'BASE_ONLY', solPrice: 100, dawnsolPrice: 100 },
+      // Jump: +50 deposit
+      { timestamp: '2026-04-05T06:05:00.000Z', totalNavUsdc: 150.05, lendingBalance: 0, lendingBreakdown: {}, multiplyBalance: 90, multiplyBreakdown: {}, dawnsolBalance: 0, dawnsolUsdcValue: 0, bufferUsdcBalance: 60.05, binanceUsdcBalance: 0, binancePerpUnrealizedPnl: 0, binancePerpSize: 0, state: 'BASE_ONLY', solPrice: 100, dawnsolPrice: 100 },
+      { timestamp: '2026-04-05T23:59:59.000Z', totalNavUsdc: 150.10, lendingBalance: 0, lendingBreakdown: {}, multiplyBalance: 90, multiplyBreakdown: {}, dawnsolBalance: 0, dawnsolUsdcValue: 0, bufferUsdcBalance: 60.10, binanceUsdcBalance: 0, binancePerpUnrealizedPnl: 0, binancePerpSize: 0, state: 'BASE_ONLY', solPrice: 100, dawnsolPrice: 100 },
+    ];
+
+    const ret = computeTimeWeightedReturn(snaps);
+    // Pre-jump: 100.05/100 = 1.0005
+    // Post-jump: 150.10/150.05 ≈ 1.000333
+    // TWR ≈ 1.0005 * 1.000333 - 1 ≈ 0.000833
+    expect(ret).toBeGreaterThan(0);
+    expect(ret).toBeCloseTo(0.000833, 4);
+  });
+
   it('ignores internal rebalance events that happen after the last snapshot of the day', async () => {
     snapshots = [
       {
