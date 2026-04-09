@@ -71,10 +71,11 @@ USDC lending on Kamino / Jupiter Lend (3-8%) is used as the supplementary sleeve
 
 **Alpha Layer - SOL Delta-Neutral**
 
-- USDC -> dawnSOL (on-chain, Jupiter) + SOL-PERP short (Binance Futures), executed in parallel
+- USDC -> dawnSOL (on-chain, Jupiter) + SOL-PERP short, executed in parallel
   - dawnSOL provides ~7% staking yield on the long leg
   - 1x leverage only (no liquidation risk on perp side)
   - Activated only when SOL funding rate is sufficiently positive
+  - **Perp venue** is configurable via `config.perp.exchange`: `"binance"` (Binance Futures, default) or `"bulk"` (Bulk Trade on-chain perp, testnet only)
 
 | Signal | Live runtime setting |
 |---|---|
@@ -144,6 +145,7 @@ bot/src/
 ├── connectors/
 │   ├── defi/              # Kamino (Multiply/Loop/Lending), Jupiter (Swap/Lend), Onre APY
 │   ├── binance/           # REST + WebSocket clients for Futures
+│   ├── bulk/              # REST + WebSocket clients for Bulk Trade perp (testnet)
 │   └── solana/            # RPC, wallet, token operations
 ├── advisor/
 │   ├── advisor.ts         # AI Advisor: Claude API integration, evaluation loop
@@ -263,6 +265,54 @@ Evaluated Hyperliquid SOL Perp as an alternative short leg for the DN strategy. 
 - Result: **NO-GO** (both exchanges in negative FR regime, no advantage for Hyperliquid)
 - Script: `bot/scripts/compare-funding-rates.ts`
 - May revisit if market conditions change
+
+### Bulk Trade SOL Perp (2026-04, Integrated — Testnet)
+
+Evaluated [Bulk Trade](https://bulk.trade) as an alternative short leg for the DN strategy, and built a full connector. Bulk is a Solana-native perp DEX that embeds a matching engine directly into validator nodes ("Bulk Tile"), targeting CEX-grade performance (~20ms matching, ~40ms finality) with non-custodial settlement on Solana.
+
+**Status:** Alphanet (testnet) only. Mainnet was expected Q4 2025 but has been delayed with no confirmed date. $8M seed round led by 6th Man Ventures and Robot Ventures, with Anatoly Yakovenko as angel investor.
+
+**Integration:** Full testnet connector is implemented and tested. Switch between Binance and Bulk by setting `config.perp.exchange` to `"bulk"`. The bot selects `buildBulkDnConnectors()` at startup — no other code change needed.
+
+| File | Purpose |
+|---|---|
+| `bot/src/connectors/bulk/rest.ts` | REST client — order placement, margin balance, mark price, funding rate |
+| `bot/src/connectors/bulk/ws.ts` | WebSocket client — real-time mark price with auto-reconnect |
+| `bot/src/connectors/bulk/keychain.ts` | Native Ed25519 signing wrapper for Bulk's auth scheme |
+| `bot/src/connectors/bulk/types.ts` | TypeScript types for Bulk API |
+| `bot/scripts/test-bulk-flow.ts` | Testnet integration script (status / funding / faucet / short / close) |
+
+| Spec | Binance (current) | Bulk Trade |
+|---|---|---|
+| Status | Production | Alphanet (testnet) |
+| Fees | maker 0.02% / taker 0.04% | maker 0-0.02% / taker 0.022-0.035% |
+| Max leverage | 125x | 20x |
+| Collateral | USDT/USDC | USDC only |
+| Margin | Cross / Isolated | Portfolio margin (correlation-adjusted) |
+| Liquidation fee | Yes | None |
+| Funding interval | 8h | 1h |
+| Custody | CEX (exchange-managed) | Non-custodial (Solana smart contract) |
+| KYC | Required | Not required |
+| API | REST/WS, mature | REST/WS, Ed25519 signing (Python/Rust/Node SDK) |
+
+**Pros for Vault:**
+- Non-custodial — eliminates CEX counterparty risk (no Binance insolvency exposure)
+- KYC-free — reduces regulatory complexity for fund operation
+- Lower fees with maker rebates at higher tiers
+- 1h funding settlement enables finer hedge management
+- Portfolio margin recognizes hedges (30-70% margin efficiency gain)
+- Solana-native — USDC collateral without cross-chain bridging
+- 20x leverage is sufficient for 1x DN short
+
+**Risks:**
+- Mainnet not live — no production track record
+- Zero real liquidity — orderbook depth and slippage unknown
+- No published security audit
+- Validator fork dependency — Solana upgrade compatibility risk
+
+**Custody note:** Using Bulk Trade eliminates the risk of a CEX holding Vault funds, but does not change the fact that the Vault itself custodies client assets. A fully non-custodial model would require restructuring from fund-style to protocol-style (e.g., clients hold positions directly, Vault provides signals or co-signs via multisig).
+
+**Decision:** WATCH for mainnet. Testnet connector is ready. Revisit production migration after mainnet launch, security audit completion, and sufficient liquidity buildup.
 
 ### Kamino Multiply SDK (Technical Note)
 
