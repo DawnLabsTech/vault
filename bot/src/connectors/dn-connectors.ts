@@ -522,7 +522,7 @@ export function buildBulkDnConnectors(deps: {
       return bulkRest.openShort(symbol(), solAmount);
     },
 
-    // 7. closePerpShort — Bulk order
+    // 7. closePerpShort — Bulk order (size determined from live position)
     async closePerpShort(): Promise<{ pnl: number; orderId: string }> {
       log.info('closePerpShort via Bulk');
       if (dryRun()) return { pnl: 0, orderId: 'dry-run-bulk-close' };

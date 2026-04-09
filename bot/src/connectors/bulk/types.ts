@@ -1,4 +1,4 @@
-// Bulk Trade API types
+// Bulk Trade API types — based on actual testnet API responses
 
 // ── Order input types ───────────────────────────────────────────────────────
 
@@ -40,79 +40,119 @@ export interface BulkApiError {
   code?: number;
 }
 
-/** Response from POST /order */
-export interface BulkOrderResponse {
-  statuses: BulkOrderStatus[];
-}
-
-export type BulkOrderStatus =
-  | { resting: { oid: string } }
-  | { filled: { oid: string; totalSz: number; avgPx: number } }
-  | { error: string }
-  | { cancelled: { oid: string } };
-
-/** POST /account with type='fullAccount' */
-export interface BulkFullAccountResponse {
-  marginSummary: BulkMarginSummary;
-  positions: BulkPosition[];
-  openOrders: BulkOpenOrder[];
-  leverageSettings: Record<string, number>;
-}
-
-export interface BulkMarginSummary {
-  /** Total USDC deposited as margin */
-  accountValue: number;
-  /** Available USDC margin not tied to positions */
-  totalMarginUsed: number;
-  totalRawUsd: number;
-  totalNtlPos: number;
-}
-
-export interface BulkPosition {
-  coin: string;              // e.g. 'SOL'
-  szi: number;               // signed size: negative = short
-  entryPx: number;
-  positionValue: number;
-  unrealizedPnl: number;
-  returnOnEquity: number;
-  liquidationPx: number | null;
-  marginUsed: number;
-  maxLeverage: number;
-  cumFunding: {
-    allTime: number;
-    sinceOpen: number;
+/**
+ * Response from POST /order
+ * Shape: { "status": "ok", "response": { "type": "order", "data": { "statuses": [...] } } }
+ */
+export interface BulkOrderResponseRaw {
+  status: string;
+  response: {
+    type: string;
+    data: {
+      statuses: Array<Record<string, BulkOrderStatusInner>>;
+    };
   };
 }
 
-export interface BulkOpenOrder {
-  coin: string;
-  side: 'A' | 'B'; // A=ask(sell), B=bid(buy)
-  limitPx: number;
-  sz: number;
-  oid: string;
-  timestamp: number;
-  origSz: number;
-  reduceOnly: boolean;
-  tif: string;
+export interface BulkOrderStatusInner {
+  /** Set for resting/filled orders */
+  oid?: string;
+  /** Present on fill */
+  totalSz?: number;
+  avgPx?: number;
+  /** Present on faucet deposit */
+  amount?: number;
+  /** Present on risk-limit rejection */
+  reason?: string;
+  /** Present on error */
+  error?: string;
 }
 
-/** GET /stats response (per-market stats with funding rates) */
+/**
+ * POST /account with type='fullAccount'
+ * Response: [{ "fullAccount": { margin, positions, openOrders, leverageSettings } }]
+ */
+export interface BulkFullAccountRaw {
+  fullAccount: {
+    margin: BulkMargin;
+    positions: BulkPositionRaw[];
+    openOrders: BulkOpenOrderRaw[];
+    leverageSettings: Array<{ symbol: string; leverage: number }>;
+  };
+}
+
+export interface BulkMargin {
+  totalBalance: number;
+  availableBalance: number;
+  marginUsed: number;
+  notional: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  fees: number;
+  funding: number;
+}
+
+export interface BulkPositionRaw {
+  symbol: string;         // e.g. 'SOL-USD'
+  size: number;           // signed: negative = short, positive = long
+  price: number;          // entry price
+  fairPrice: number;      // current mark price
+  notional: number;       // signed notional value
+  unrealizedPnl: number;
+  realizedPnl: number;
+  liquidationPrice: number;
+  leverage: number;
+  maintenanceMargin: number;
+  fees: number;
+  funding: number;
+  lambda: number;
+  riskAllocation: number;
+}
+
+export interface BulkOpenOrderRaw {
+  symbol: string;
+  side: 'buy' | 'sell';
+  price: number;
+  size: number;
+  orderId: string;
+  timestamp: number;
+  reduceOnly: boolean;
+  timeInForce: string;
+}
+
+/** GET /stats?symbol=SOL-USD response */
 export interface BulkStatsResponse {
-  [symbol: string]: BulkMarketStats;
+  timestamp: number;
+  period: string;
+  volume: { totalUsd: number };
+  openInterest: { totalUsd: number };
+  funding: {
+    rates: Record<string, {
+      current: number;        // hourly rate as decimal (e.g. 0.000125)
+      annualized: number;     // e.g. 0.136875 = 13.69% per year
+    }>;
+  };
+  markets: BulkMarketStats[];
 }
 
 export interface BulkMarketStats {
-  coin: string;
-  markPx: number;
-  midPx: number;
-  prevDayPx: number;
-  dayNtlVlm: number;
+  symbol: string;
+  volume: number;
+  quoteVolume: number;
   openInterest: number;
-  /** Hourly funding rate (as decimal, e.g. 0.0001 = 0.01%) */
-  funding: number;
-  /** Annualized funding rate derived from hourly rate × 8760 */
-  fundingAnnualized?: number;
-  premium: number;
+  fundingRate: number;            // hourly rate as decimal
+  fundingRateAnnualized: number;  // annualized as decimal (not %)
+  lastPrice: number;
+  markPrice: number;
+}
+
+// ── Normalized account view ─────────────────────────────────────────────────
+
+/** Parsed/normalized view of the account for internal use */
+export interface BulkAccount {
+  margin: BulkMargin;
+  positions: BulkPositionRaw[];
+  openOrders: BulkOpenOrderRaw[];
 }
 
 // ── WebSocket message types ─────────────────────────────────────────────────
@@ -123,13 +163,13 @@ export interface BulkWsMessage {
 }
 
 export interface BulkTickerData {
-  coin: string;
+  symbol?: string;
+  coin?: string;
   /** Current mark/fair price */
-  fairPrice: number;
-  /** 24h funding rate (hourly) */
-  funding?: number;
+  fairPrice?: number;
   markPx?: number;
-  midPx?: number;
+  markPrice?: number;
+  fundingRate?: number;
   openInterest?: number;
 }
 
