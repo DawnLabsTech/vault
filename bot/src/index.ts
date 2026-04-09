@@ -27,7 +27,9 @@ import { KaminoMultiplyLending } from './connectors/defi/kamino-multiply.js';
 import { JupiterLending } from './connectors/defi/jupiter-lend.js';
 import { JupiterSwap } from './connectors/defi/jupiter-swap.js';
 import { SolanaTransactionSender } from './connectors/solana/tx-sender.js';
-import { buildDnConnectors } from './connectors/dn-connectors.js';
+import { buildDnConnectors, buildBulkDnConnectors } from './connectors/dn-connectors.js';
+import { BulkRestClient } from './connectors/bulk/rest.js';
+import { BulkWsClient } from './connectors/bulk/ws.js';
 import { MarketScanner } from './core/market-scanner.js';
 import { MultiplyRiskScorer } from './risk/multiply-risk-scorer.js';
 import { Advisor } from './advisor/advisor.js';
@@ -54,9 +56,11 @@ async function main(): Promise<void> {
   const perpExchange = config.perp.exchange;
   log.info({ perpExchange }, 'Perp exchange selected');
 
-  // Initialize Binance clients (only when using Binance for perp)
+  // Initialize perp exchange clients
   let binanceRest: BinanceRestClient | null = null;
   let binanceWs: BinanceWsClient | null = null;
+  let bulkRest: BulkRestClient | null = null;
+  let bulkWs: BulkWsClient | null = null;
 
   if (perpExchange === 'binance') {
     binanceRest = new BinanceRestClient(
@@ -64,11 +68,17 @@ async function main(): Promise<void> {
       process.env.BINANCE_API_SECRET || '',
       config.binance.testnet,
     );
-
     binanceWs = new BinanceWsClient(
       config.binance.symbol.toLowerCase(),
       config.binance.testnet,
     );
+  } else if (perpExchange === 'bulk') {
+    if (!config.bulk) throw new Error('perp.exchange is "bulk" but bulk config section is missing');
+    // Reuse the Solana wallet secret key seed for Bulk signing
+    const wallet = loadWalletFromEnv();
+    const secretKeySeed = wallet.secretKey.slice(0, 32);
+    bulkRest = new BulkRestClient(secretKeySeed, config.bulk.testnet);
+    bulkWs = new BulkWsClient(config.bulk.symbol);
   }
 
   // Load wallet and initialize lending adapters
@@ -137,24 +147,43 @@ async function main(): Promise<void> {
   if (binanceWs) {
     binanceWs.onMarkPrice((data) => { latestMarkPrice = data.markPrice; });
   }
+  if (bulkWs) {
+    bulkWs.onMarkPrice((price) => { latestMarkPrice = price; });
+    bulkWs.connect();
+  }
 
   // Ensure txSender is available in live mode
   if (!config.general.dryRun && !txSender) {
     throw new Error('TxSender is required in live mode — check SOLANA_PRIVATE_KEY');
   }
 
-  // Build DN connectors
-  log.info('Building Binance DN connectors');
-  const dnConnectors = buildDnConnectors({
-    binanceRest: binanceRest!,
-    lendingAdapters,
-    baseAllocator,
-    jupiterSwap,
-    txSender: txSender!,
-    walletAddress,
-    config,
-    getLatestMarkPrice: () => latestMarkPrice,
-  });
+  // Build DN connectors based on selected exchange
+  let dnConnectors;
+  if (perpExchange === 'bulk') {
+    log.info('Building Bulk DN connectors');
+    dnConnectors = buildBulkDnConnectors({
+      bulkRest: bulkRest!,
+      lendingAdapters,
+      baseAllocator,
+      jupiterSwap,
+      txSender: txSender!,
+      walletAddress,
+      config,
+      getLatestMarkPrice: () => latestMarkPrice,
+    });
+  } else {
+    log.info('Building Binance DN connectors');
+    dnConnectors = buildDnConnectors({
+      binanceRest: binanceRest!,
+      lendingAdapters,
+      baseAllocator,
+      jupiterSwap,
+      txSender: txSender!,
+      walletAddress,
+      config,
+      getLatestMarkPrice: () => latestMarkPrice,
+    });
+  }
 
   const dnExecutor = new DnExecutor(config, dnConnectors, walletAddress);
   const riskManager = new RiskManager(config);

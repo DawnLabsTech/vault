@@ -11,6 +11,7 @@ import {
 import { createChildLogger } from '../utils/logger.js';
 import type { DnConnectors } from '../strategies/dn-executor.js';
 import type { BinanceRestClient } from './binance/rest.js';
+import type { BulkRestClient } from './bulk/rest.js';
 import type { BaseAllocator } from '../strategies/base-allocator.js';
 import type { JupiterSwap } from './defi/jupiter-swap.js';
 import type { SolanaTransactionSender } from './solana/tx-sender.js';
@@ -440,3 +441,140 @@ export function buildDnConnectors(deps: {
   };
 }
 
+// ── Bulk DN Connectors ──────────────────────────────────────────────────────
+
+export function buildBulkDnConnectors(deps: {
+  bulkRest: BulkRestClient;
+  lendingAdapters: LendingProtocol[];
+  baseAllocator: BaseAllocator;
+  jupiterSwap: JupiterSwap;
+  txSender: SolanaTransactionSender;
+  walletAddress: string;
+  config: VaultConfig;
+  getLatestMarkPrice?: () => number;
+}): DnConnectors {
+  const {
+    bulkRest,
+    lendingAdapters,
+    baseAllocator,
+    jupiterSwap,
+    txSender,
+    config,
+  } = deps;
+
+  const dryRun = () => config.general.dryRun;
+  const slippageBps = () => config.perp.swapSlippageBps;
+  const symbol = () => config.bulk!.symbol;
+
+  return {
+    // 1. withdrawFromLending — same as Binance
+    async withdrawFromLending(amount: number): Promise<string> {
+      log.info({ amount }, 'withdrawFromLending');
+      if (dryRun()) return 'dry-run-withdraw-lending-tx';
+      const protocol = await findLargestProtocol(lendingAdapters, baseAllocator);
+      const txSig = await protocol.withdraw(amount);
+      log.info({ protocol: protocol.name, amount, txSig }, 'Withdrawal complete');
+      return txSig;
+    },
+
+    // 2. transferUsdcToBinance — NO-OP for Bulk (margin is managed on Bulk directly)
+    // NOTE: On-chain USDC → Bulk margin deposit requires Bulk's deposit program.
+    // For testnet: use BulkRestClient.requestFaucet() to pre-fund the account.
+    // For mainnet: this step will be replaced by Bulk's deposit SDK once available.
+    async transferUsdcToBinance(_amount: number): Promise<string> {
+      log.info('[Bulk] transferUsdcToBinance is a no-op — Bulk manages margin on-chain');
+      return 'bulk-no-op-transfer';
+    },
+
+    // 3. waitForBinanceDeposit — NO-OP for Bulk
+    async waitForBinanceDeposit(_amount: number, _timeoutMs: number): Promise<boolean> {
+      log.info('[Bulk] waitForBinanceDeposit is a no-op');
+      return true;
+    },
+
+    // 4. swapUsdcToDawnSol — same as Binance (Jupiter on-chain swap)
+    async swapUsdcToDawnSol(usdcAmount: number): Promise<{ dawnsolAmount: number; txSig: string }> {
+      log.info({ usdcAmount }, 'swapUsdcToDawnSol');
+      if (dryRun()) {
+        return { dawnsolAmount: (usdcAmount / 150) * 0.95, txSig: 'dry-run-swap-usdc-dawnsol-tx' };
+      }
+      const baseUnits = Math.floor(usdcAmount * 10 ** USDC_DECIMALS);
+      const { outputAmount, txSig } = await executeJupiterSwap(jupiterSwap, txSender, MINTS.USDC, MINTS.DAWNSOL, baseUnits, slippageBps());
+      const dawnsolAmount = outputAmount / 10 ** SOL_DECIMALS;
+      log.info({ usdcAmount, dawnsolAmount, txSig }, 'Swapped USDC -> dawnSOL');
+      return { dawnsolAmount, txSig };
+    },
+
+    // 5. getSolPrice — prefer WebSocket mark price, fallback to Bulk REST
+    async getSolPrice(): Promise<number> {
+      if (dryRun()) return 150;
+      const wsPrice = deps.getLatestMarkPrice?.();
+      if (wsPrice && wsPrice > 0) return wsPrice;
+      return bulkRest.getMarkPrice(symbol());
+    },
+
+    // 6. openPerpShort — Bulk order
+    async openPerpShort(solAmount: number): Promise<{ size: number; entryPrice: number; orderId: string }> {
+      log.info({ solAmount }, 'openPerpShort via Bulk');
+      if (dryRun()) {
+        return { size: solAmount, entryPrice: 150, orderId: 'dry-run-bulk-short' };
+      }
+      return bulkRest.openShort(symbol(), solAmount);
+    },
+
+    // 7. closePerpShort — Bulk order
+    async closePerpShort(): Promise<{ pnl: number; orderId: string }> {
+      log.info('closePerpShort via Bulk');
+      if (dryRun()) return { pnl: 0, orderId: 'dry-run-bulk-close' };
+      return bulkRest.closeShort(symbol());
+    },
+
+    // 8. swapDawnSolToSol — same as Binance (Jupiter on-chain swap)
+    async swapDawnSolToSol(dawnsolAmount: number): Promise<{ solAmount: number; txSig: string }> {
+      log.info({ dawnsolAmount }, 'swapDawnSolToSol');
+      if (dryRun()) return { solAmount: dawnsolAmount * 1.05, txSig: 'dry-run-swap-dawnsol-sol-tx' };
+      const baseUnits = Math.floor(dawnsolAmount * 10 ** SOL_DECIMALS);
+      const { outputAmount, txSig } = await executeJupiterSwap(jupiterSwap, txSender, MINTS.DAWNSOL, MINTS.SOL, baseUnits, slippageBps());
+      const solAmount = outputAmount / 10 ** SOL_DECIMALS;
+      log.info({ dawnsolAmount, solAmount, txSig }, 'Swapped dawnSOL -> SOL');
+      return { solAmount, txSig };
+    },
+
+    // 9. swapSolToUsdc — same as Binance (Jupiter on-chain swap)
+    async swapSolToUsdc(solAmount: number): Promise<{ usdcAmount: number; txSig: string }> {
+      log.info({ solAmount }, 'swapSolToUsdc');
+      if (dryRun()) return { usdcAmount: solAmount * 150, txSig: 'dry-run-swap-sol-usdc-tx' };
+      const lamports = Math.floor(solAmount * 10 ** SOL_DECIMALS);
+      const { outputAmount, txSig } = await executeJupiterSwap(jupiterSwap, txSender, MINTS.SOL, MINTS.USDC, lamports, slippageBps());
+      const usdcAmount = outputAmount / 10 ** USDC_DECIMALS;
+      log.info({ solAmount, usdcAmount, txSig }, 'Swapped SOL -> USDC');
+      return { usdcAmount, txSig };
+    },
+
+    // 10. transferSpotToFutures — NO-OP for Bulk (no CEX wallet separation)
+    async transferSpotToFutures(_amount: number): Promise<void> {
+      log.info('[Bulk] transferSpotToFutures is a no-op');
+    },
+
+    // 11. transferFuturesToSpot — NO-OP for Bulk
+    async transferFuturesToSpot(_amount: number): Promise<void> {
+      log.info('[Bulk] transferFuturesToSpot is a no-op');
+    },
+
+    // 12. getFuturesUsdcBalance — Bulk margin balance
+    async getFuturesUsdcBalance(): Promise<number> {
+      if (dryRun()) return 500;
+      return bulkRest.getMarginBalance();
+    },
+
+    // 13. depositToLending — same as Binance
+    async depositToLending(usdcAmount: number): Promise<string> {
+      log.info({ usdcAmount }, 'depositToLending');
+      if (dryRun()) return 'dry-run-deposit-lending-tx';
+      const protocol = await findBestApyProtocol(lendingAdapters, baseAllocator);
+      const txSig = await protocol.deposit(usdcAmount);
+      log.info({ protocol: protocol.name, usdcAmount, txSig }, 'Deposit complete');
+      return txSig;
+    },
+  };
+}

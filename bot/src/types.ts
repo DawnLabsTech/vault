@@ -125,7 +125,7 @@ export interface LendingProtocol {
 }
 
 // Config
-export type PerpExchange = 'binance';
+export type PerpExchange = 'binance' | 'bulk';
 
 export interface VaultConfig {
   general: {
@@ -147,6 +147,13 @@ export interface VaultConfig {
     leverage: number;
     testnet: boolean;
     swapSlippageBps: number;
+  };
+  bulk?: {
+    /** Market symbol in Bulk format, e.g. 'SOL-USD'. */
+    symbol: string;
+    leverage: number;
+    /** true while Bulk mainnet is not yet live. */
+    testnet: boolean;
   };
   solana: {
     network: 'mainnet-beta' | 'devnet';

@@ -19,6 +19,11 @@
     "testnet": false,
     "swapSlippageBps": 50
   },
+  "bulk": {
+    "symbol": "SOL-USD",
+    "leverage": 1,
+    "testnet": true
+  },
   "solana": {
     "network": "mainnet-beta"
   },
