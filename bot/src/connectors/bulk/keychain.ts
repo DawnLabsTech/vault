@@ -7,9 +7,17 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-// Load the platform-specific native binary
+// Load the platform-specific native binary. The package ships a binary per
+// (platform, arch, libc) tuple in its root and expects the loader to pick one.
+function nativeBinaryPath(): string {
+  const { platform, arch } = process;
+  if (platform === 'darwin') return `bulk-keychain/bulk-keychain.darwin-${arch}.node`;
+  if (platform === 'linux') return `bulk-keychain/bulk-keychain.linux-${arch}-gnu.node`;
+  if (platform === 'win32') return `bulk-keychain/bulk-keychain.win32-${arch}-msvc.node`;
+  throw new Error(`bulk-keychain: unsupported platform ${platform}-${arch}`);
+}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const native = require('bulk-keychain/bulk-keychain.darwin-arm64.node') as BulkKeychainNative;
+const native = require(nativeBinaryPath()) as BulkKeychainNative;
 
 // ── Native module types ─────────────────────────────────────────────────────
 
