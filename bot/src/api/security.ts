@@ -128,7 +128,7 @@ export function isValidDateString(s: string): boolean {
 const VALID_EVENT_TYPES = new Set([
   'deposit', 'withdraw', 'swap', 'perp_open', 'perp_close',
   'fr_payment', 'lending_interest', 'rebalance', 'alert',
-  'state_change', 'transfer',
+  'state_change', 'transfer', 'anomaly',
 ]);
 
 export function isValidEventType(s: string): boolean {

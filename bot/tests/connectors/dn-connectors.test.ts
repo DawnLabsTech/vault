@@ -159,6 +159,7 @@ function makeMockJupiterSwap() {
 function makeMockTxSender() {
   return {
     signAndSendBase64: vi.fn().mockResolvedValue('mock-tx-sig'),
+    signAndSendBase64Confirm: vi.fn().mockResolvedValue('mock-tx-sig'),
     signAndSend: vi.fn().mockResolvedValue('mock-tx-sig'),
     signSendConfirm: vi.fn().mockResolvedValue('mock-tx-sig'),
     confirm: vi.fn().mockResolvedValue(true),
@@ -323,8 +324,7 @@ describe('DN Connectors — live mode (mocked deps)', () => {
       1_000_000_000,      // 1000 USDC in base units (6 decimals)
       50,
     );
-    expect(mocks.txSender.signAndSendBase64).toHaveBeenCalledWith('base64-mock-tx');
-    expect(mocks.txSender.confirm).toHaveBeenCalledWith('mock-tx-sig');
+    expect(mocks.txSender.signAndSendBase64Confirm).toHaveBeenCalledWith('base64-mock-tx');
     expect(result.dawnsolAmount).toBeCloseTo(0.95, 2); // 950_000_000 / 1e9
     expect(result.txSig).toBe('mock-tx-sig');
   });
@@ -430,10 +430,12 @@ describe('DN Connectors — live mode (mocked deps)', () => {
   });
 
   it('swapUsdcToDawnSol throws when confirmation fails', async () => {
-    mocks.txSender.confirm.mockResolvedValue(false);
+    mocks.txSender.signAndSendBase64Confirm.mockRejectedValue(
+      new Error('tx mock-tx-sig not confirmed within 60000ms'),
+    );
 
     await expect(connectors.swapUsdcToDawnSol(500)).rejects.toThrow(
-      'failed to confirm',
+      'not confirmed',
     );
   });
 

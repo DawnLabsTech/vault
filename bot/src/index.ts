@@ -10,6 +10,13 @@ import { validateEnv } from './utils/validate-env.js';
 import { configManager, getConfig } from './config.js';
 import { initDb, closeDb, getDb } from './measurement/db.js';
 import { FrMonitor } from './core/fr-monitor.js';
+import { BorrowRateMonitor } from './core/borrow-rate-monitor.js';
+import {
+  OracleMonitor,
+  defaultJupiterQuoteSource,
+  defaultPythSource,
+} from './risk/oracle-monitor.js';
+import { LiquidityStressMonitor } from './core/liquidity-stress-monitor.js';
 import { BaseAllocator } from './strategies/base-allocator.js';
 import { CapitalAllocator } from './strategies/capital-allocator.js';
 import { DnExecutor } from './strategies/dn-executor.js';
@@ -34,6 +41,7 @@ import { MarketScanner } from './core/market-scanner.js';
 import { MultiplyRiskScorer } from './risk/multiply-risk-scorer.js';
 import { Advisor } from './advisor/advisor.js';
 import { ChatService } from './chat/chat-service.js';
+import { AnomalyMonitor, createDefaultHandlers } from './risk/anomaly-monitor.js';
 import type { LendingProtocol } from './types.js';
 
 const log = createChildLogger('main');
@@ -140,6 +148,8 @@ async function main(): Promise<void> {
   const db = getDb();
   const frPeriodsPerDay = 3;
   const frMonitor = new FrMonitor(db, frPeriodsPerDay);
+  const borrowRateMonitor = new BorrowRateMonitor(db);
+  const liquidityStressMonitor = new LiquidityStressMonitor(db, config.liquidityStress);
   const baseAllocator = new BaseAllocator(lendingAdapters, config, rpcUrl);
 
   // Track latest mark price from WebSocket for DN connectors
@@ -211,6 +221,33 @@ async function main(): Promise<void> {
     log.info(
       { count: kaminoMultiplyAdapters.length, labels: kaminoMultiplyAdapters.map((a) => a.getMultiplyConfig().label) },
       'Multiply adapters initialized',
+    );
+  }
+
+  // Initialize Oracle anomaly monitor — only meaningful when there are
+  // Multiply positions to monitor.
+  let oracleMonitor: OracleMonitor | null = null;
+  if (kaminoMultiplyAdapters.length > 0) {
+    const pythIds = process.env.ORACLE_PYTH_PRICE_IDS
+      ? Object.fromEntries(
+          process.env.ORACLE_PYTH_PRICE_IDS.split(',')
+            .map((entry) => entry.split(':').map((s) => s.trim()))
+            .filter((parts) => parts.length === 2 && parts[0] && parts[1]) as [string, string][],
+        )
+      : undefined;
+    oracleMonitor = new OracleMonitor({
+      markets: kaminoMultiplyAdapters.map((a) => ({
+        label: a.getMultiplyConfig().label,
+        getOraclePrices: () => a.getOraclePrices(),
+      })),
+      config: config.oracleMonitor,
+      jupiterQuote: defaultJupiterQuoteSource,
+      pythSource: pythIds && Object.keys(pythIds).length > 0 ? defaultPythSource : null,
+      pythPriceIds: pythIds,
+    });
+    log.info(
+      { markets: kaminoMultiplyAdapters.length, pythAssets: pythIds ? Object.keys(pythIds).length : 0 },
+      'Oracle monitor initialized',
     );
   }
 
@@ -325,6 +362,29 @@ async function main(): Promise<void> {
     }
   }
 
+  // Initialize Anomaly Monitor (Phase 1: Kamino lending program upgrade authority)
+  let anomalyMonitor: AnomalyMonitor | null = null;
+  if (rpcUrl) {
+    try {
+      anomalyMonitor = new AnomalyMonitor(db, rpcUrl);
+      for (const handler of createDefaultHandlers()) {
+        anomalyMonitor.register(handler);
+      }
+      // Seed baselines once at startup; if RPC fails, log and continue —
+      // first webhook/poll will retry.
+      await anomalyMonitor.seedBaselines();
+      log.info('Anomaly monitor initialized');
+    } catch (err) {
+      log.warn(
+        { error: (err as Error).message },
+        'Anomaly monitor initialization failed — continuing without anomaly detection',
+      );
+      anomalyMonitor = null;
+    }
+  } else {
+    log.info('HELIUS_RPC_URL not set — anomaly monitor disabled');
+  }
+
   // Create orchestrator
   const orchestrator = new Orchestrator({
     binanceRest,
@@ -340,7 +400,11 @@ async function main(): Promise<void> {
     kaminoLoop: kaminoLoop ?? null,
     kaminoMultiplyAdapters,
     marketScanner,
+    oracleMonitor,
+    borrowRateMonitor,
+    liquidityStressMonitor,
     advisor,
+    anomalyMonitor,
   });
 
   // Start API server
@@ -352,6 +416,7 @@ async function main(): Promise<void> {
   apiServer.setPerpExchange(perpExchange);
   apiServer.setAdvisorStore(advisor?.getStore() ?? null);
   apiServer.setChatService(chatService);
+  apiServer.setAnomalyMonitor(anomalyMonitor);
   const apiPort = Number.parseInt(process.env.API_PORT || '3000', 10);
   apiServer.start(Number.isFinite(apiPort) ? apiPort : 3000);
 

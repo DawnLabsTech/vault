@@ -9,7 +9,8 @@
     "test": "vitest",
     "lint": "eslint src/",
     "migrate": "tsx scripts/migrate-db.ts",
-    "export": "tsx scripts/export-data.ts"
+    "export": "tsx scripts/export-data.ts",
+    "setup-helius-webhook": "tsx scripts/setup-helius-webhook.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

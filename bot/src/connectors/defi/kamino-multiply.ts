@@ -370,6 +370,14 @@ export class KaminoMultiplyLending implements LendingProtocol {
    * Returns effective APY including leverage and native yield.
    */
   async getApy(): Promise<number> {
+    const breakdown = await this.getApyBreakdown();
+    return breakdown.effectiveApy;
+  }
+
+  /**
+   * Returns full APY breakdown including base borrow/supply rates, native yield, and leverage.
+   */
+  async getApyBreakdown(): Promise<import('../../types.js').ApyBreakdown> {
     return withRetry(async () => {
       const { market } = await this.ensureMarketLoaded();
       await market.loadReserves();
@@ -381,7 +389,7 @@ export class KaminoMultiplyLending implements LendingProtocol {
       const debtReserve = market.getReserveByMint(address(this.cfg.debtToken));
       if (!collReserve || !debtReserve) {
         log.warn('Reserve not found for APY calculation');
-        return 0;
+        return { effectiveApy: 0, baseBorrowApy: 0, baseSupplyApy: 0, nativeYield: 0, leverage: 1 };
       }
 
       // Resolve native yield dynamically for RWA tokens
@@ -447,7 +455,7 @@ export class KaminoMultiplyLending implements LendingProtocol {
         'Multiply APY calculated',
       );
 
-      return effectiveApy;
+      return { effectiveApy, baseBorrowApy, baseSupplyApy, nativeYield, leverage };
     }, 'kamino-multiply-apy');
   }
 
@@ -982,6 +990,49 @@ export class KaminoMultiplyLending implements LendingProtocol {
       log.warn({ error: (err as Error).message }, 'Failed to get wallet collateral USD value');
       return 0;
     }
+  }
+
+  /**
+   * Read on-chain oracle prices for the collateral and debt reserves.
+   *
+   * - `oracle`: fresh price from the oracle account at refresh time
+   *   (`reserve.getOracleMarketPrice()`).
+   * - `stored`: cached price last persisted into the reserve state
+   *   (`reserve.getReserveMarketPrice()`) — this is the price Kamino
+   *   uses for liquidation math until the next refresh.
+   *
+   * Used by OracleMonitor to detect stale internal cache and to feed
+   * cross-source comparisons against Jupiter / Pyth.
+   */
+  async getOraclePrices(): Promise<{
+    label: string;
+    coll: { mint: string; decimals: number; oracle: number; stored: number };
+    debt: { mint: string; decimals: number; oracle: number; stored: number };
+  }> {
+    const { market } = await this.ensureMarketLoaded();
+    await market.loadReserves();
+
+    const collReserve = market.getReserveByMint(address(this.cfg.collToken));
+    const debtReserve = market.getReserveByMint(address(this.cfg.debtToken));
+    if (!collReserve || !debtReserve) {
+      throw new Error(`Reserves not found for ${this.cfg.label}`);
+    }
+
+    return {
+      label: this.cfg.label,
+      coll: {
+        mint: this.cfg.collToken,
+        decimals: this.cfg.collDecimals,
+        oracle: collReserve.getOracleMarketPrice().toNumber(),
+        stored: collReserve.getReserveMarketPrice().toNumber(),
+      },
+      debt: {
+        mint: this.cfg.debtToken,
+        decimals: this.cfg.debtDecimals,
+        oracle: debtReserve.getOracleMarketPrice().toNumber(),
+        stored: debtReserve.getReserveMarketPrice().toNumber(),
+      },
+    };
   }
 
   /** Expose config for orchestrator health monitoring */

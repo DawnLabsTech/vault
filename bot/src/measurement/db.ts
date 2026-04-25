@@ -90,6 +90,27 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp);
   CREATE INDEX IF NOT EXISTS idx_fr_history_timestamp ON fr_history(timestamp);
   CREATE INDEX IF NOT EXISTS idx_fr_history_symbol ON fr_history(symbol);
+
+  CREATE TABLE IF NOT EXISTS borrow_rate_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    label TEXT NOT NULL,
+    base_borrow_apy REAL NOT NULL,
+    base_supply_apy REAL NOT NULL,
+    effective_apy REAL NOT NULL,
+    native_yield REAL,
+    leverage REAL
+  );
+  CREATE INDEX IF NOT EXISTS idx_borrow_rate_label_ts
+    ON borrow_rate_history(label, timestamp);
+
+  CREATE TABLE IF NOT EXISTS anomaly_baseline (
+    target_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (target_id, key)
+  );
 `;
 
 export function initDb(): Database.Database {

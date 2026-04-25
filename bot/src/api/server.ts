@@ -13,6 +13,7 @@ import type { MarketScanner } from '../core/market-scanner.js';
 import type { PerpExchange } from '../types.js';
 import type { AdvisorStore } from '../advisor/store.js';
 import type { ChatService } from '../chat/chat-service.js';
+import type { AnomalyMonitor } from '../risk/anomaly-monitor.js';
 import {
   clampInteger,
   getClientIdentifier,
@@ -30,6 +31,7 @@ const log = createChildLogger('api');
 const DEFAULT_DAWNSOL_APY = 0.07; // 7% default until enough data
 const MAX_CHAT_BODY_BYTES = 16_384;
 const MAX_CHAT_MESSAGE_CHARS = 2_000;
+const MAX_WEBHOOK_BODY_BYTES = 1_048_576; // 1MB — Helius batches up to 100 enriched txs
 
 // Rate limiters: 60 GET/min and 10 POST/min per client
 const getLimit = new RateLimiter(60_000, 60);
@@ -47,6 +49,7 @@ export class ApiServer {
   private perpExchange: PerpExchange = 'binance';
   private advisorStore: AdvisorStore | null = null;
   private chatService: ChatService | null = null;
+  private anomalyMonitor: AnomalyMonitor | null = null;
 
   setFrMonitor(monitor: FrMonitor): void {
     this.frMonitor = monitor;
@@ -76,13 +79,24 @@ export class ApiServer {
     this.chatService = service;
   }
 
+  setAnomalyMonitor(monitor: AnomalyMonitor | null): void {
+    this.anomalyMonitor = monitor;
+  }
+
   start(port: number = 3000): void {
     this.server = createServer(async (req, res) => {
       // Health check — no auth required (used by Docker healthcheck)
-      const healthUrl = new URL(req.url || '/', `http://${req.headers.host}`);
-      if (healthUrl.pathname === '/health') {
+      const earlyUrl = new URL(req.url || '/', `http://${req.headers.host}`);
+      if (earlyUrl.pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok' }));
+        return;
+      }
+
+      // Helius webhook — uses its own bearer auth (HELIUS_WEBHOOK_AUTH),
+      // bypasses API_AUTH_TOKEN and the per-client rate limiter.
+      if (earlyUrl.pathname === '/webhook/helius') {
+        await this.handleHeliusWebhook(req, res);
         return;
       }
 
@@ -497,6 +511,66 @@ export class ApiServer {
       log.warn({ error: (err as Error).message }, 'Failed to fetch Binance FR history');
       return [];
     }
+  }
+
+  /**
+   * Helius webhook handler — POST /webhook/helius.
+   * Validates a bearer token from HELIUS_WEBHOOK_AUTH (configured in the
+   * Helius dashboard "Auth Header" field), then triggers anomaly checks.
+   * The payload is intentionally not parsed: handlers re-fetch on-chain
+   * state to compare against persisted baselines.
+   */
+  private async handleHeliusWebhook(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json', 'Allow': 'POST' });
+      res.end(JSON.stringify({ error: 'Method not allowed' }));
+      return;
+    }
+
+    const expectedAuth = process.env.HELIUS_WEBHOOK_AUTH;
+    if (!expectedAuth) {
+      log.error('HELIUS_WEBHOOK_AUTH not set — rejecting webhook');
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Webhook not configured' }));
+      return;
+    }
+    // Helius sends the configured value as-is in the Authorization header
+    // (no "Bearer " prefix is required). Accept either form.
+    const provided = req.headers.authorization ?? '';
+    const stripped = provided.startsWith('Bearer ') ? provided.slice('Bearer '.length) : provided;
+    if (!isValidBearerToken(`Bearer ${stripped}`, expectedAuth)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+
+    if (!this.anomalyMonitor) {
+      // Auth passed but monitor is not wired — don't 200 silently.
+      log.warn('Webhook received but AnomalyMonitor not configured');
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Anomaly monitor not configured' }));
+      return;
+    }
+
+    // Drain body so the connection closes cleanly (size-capped).
+    try {
+      await this.readRequestBody(req, MAX_WEBHOOK_BODY_BYTES);
+    } catch (err) {
+      const code = (err as Error & { code?: string }).code;
+      const status = code === 'PAYLOAD_TOO_LARGE' ? 413 : 400;
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Failed to read request body' }));
+      return;
+    }
+
+    // Acknowledge immediately; run checks asynchronously so Helius
+    // doesn't time out or treat slow checks as failures.
+    res.writeHead(202, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'accepted' }));
+
+    this.anomalyMonitor.processEvent(null).catch((err: Error) => {
+      log.error({ error: err.message }, 'Anomaly check failed after webhook');
+    });
   }
 
   private async handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {

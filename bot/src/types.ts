@@ -31,6 +31,7 @@ export enum EventType {
   ALERT = 'alert',
   STATE_CHANGE = 'state_change',
   TRANSFER = 'transfer',
+  ANOMALY = 'anomaly',
 }
 
 export interface LedgerEvent {
@@ -178,7 +179,10 @@ export interface VaultConfig {
     bufferPct: number; // keep this % liquid for withdrawals
     maxProtocolAllocationPct?: number; // max % to single protocol (default 100 = no limit)
   };
+  borrowRateSpike?: BorrowRateSpikeConfig;
+  liquidityStress?: LiquidityStressConfig;
   circuitBreaker?: CircuitBreakerConfig;
+  oracleMonitor?: OracleMonitorConfig;
   lendingProtocolMeta?: Record<string, LendingProtocolMeta>;
   lendingRiskScorer?: LendingRiskScorerConfig;
   kaminoLoop?: {
@@ -365,6 +369,38 @@ export interface MultiplyRebalanceConfig {
   defaultEmergencyHealthRate: number;
 }
 
+// APY Breakdown for Multiply positions
+export interface ApyBreakdown {
+  effectiveApy: number;
+  baseBorrowApy: number;
+  baseSupplyApy: number;
+  nativeYield: number;
+  leverage: number;
+}
+
+// Borrow Rate Spike Detection Config
+export interface LiquidityStressConfig {
+  /** Slippage (bps) that triggers a warning alert (default 100) */
+  warningSlippageBps: number;
+  /** Slippage (bps) that triggers a critical alert (default 300) */
+  criticalSlippageBps: number;
+  /** Alert cooldown in ms (default 1800000 = 30 min) */
+  alertCooldownMs: number;
+  /** Days to retain stress test data (default 7) */
+  retentionDays: number;
+}
+
+export interface BorrowRateSpikeConfig {
+  /** Annualized borrow rate above which a warning is raised (default 0.20 = 20%) */
+  absoluteThresholdAnnualized: number;
+  /** Bps increase per hour that triggers a warning (default 500) */
+  rateChangeThresholdBps: number;
+  /** Effective APY below which a critical alert + deleverage is triggered (default 0) */
+  negativeSpreadThreshold: number;
+  /** Days to retain borrow rate samples (default 7) */
+  sampleRetentionDays: number;
+}
+
 // Price data
 export interface PriceData {
   sol: number;
@@ -405,12 +441,45 @@ export interface CircuitBreakerConfig {
   tvlDropWindowMs: number;
   /** Max consecutive failures before disabling protocol (default 3) */
   maxConsecutiveFailures: number;
-  /** Oracle price deviation in bps to trigger warning (default 50) */
-  oracleDeviationBps: number;
-  /** Oracle deviation in bps to trigger withdrawal (default 100) */
-  oracleDeviationCriticalBps: number;
   /** Cooldown period after tripping before re-enabling (default 86_400_000 = 24h) */
   cooldownMs: number;
+}
+
+// Oracle Anomaly Monitor Config
+export interface OracleMonitorConfig {
+  /** Check interval in ms (default 300_000 = 5 min — aligned with kamino-multiply-health) */
+  checkIntervalMs: number;
+  /**
+   * Number of consecutive samples a critical condition must hold before
+   * a critical action fires. Warnings emit on the first sample (default 3 →
+   * ~15 min sustained-critical latency at the default 5-min interval).
+   */
+  sustainedSamples: number;
+  /** USDC: oracle vs $1.00 deviation in bps for warning (default 50) */
+  usdcDeviationWarnBps: number;
+  /** USDC: oracle vs $1.00 deviation in bps for critical (default 100) */
+  usdcDeviationCriticalBps: number;
+  /**
+   * Kamino reserve stored price vs fresh oracle price delta in bps that
+   * indicates a stale internal cache (default 100).
+   */
+  kaminoStaleStoredBps: number;
+  /** ONyc: cross-source (Kamino vs Jupiter quote) deviation warn bps (default 50) */
+  onycCrossSourceWarnBps: number;
+  /** ONyc: cross-source deviation critical bps (default 100) */
+  onycCrossSourceCriticalBps: number;
+  /**
+   * ONyc: tighter critical threshold for the dangerous direction (Kamino oracle
+   * over-prices collateral vs Jupiter DEX quote) — silent liquidation buffer
+   * erosion (default 75).
+   */
+  onycOverpriceCriticalBps: number;
+  /** Pyth: max staleness in seconds before warning (default 60) */
+  pythStalenessSec: number;
+  /** Pyth: max confidence/price ratio in pct before warning (default 1.0) */
+  pythConfidencePct: number;
+  /** Alert cooldown per (kind, severity) key in ms (default 1_800_000 = 30 min) */
+  alertCooldownMs: number;
 }
 
 // Health status

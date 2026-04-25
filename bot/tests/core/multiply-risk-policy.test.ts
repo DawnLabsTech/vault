@@ -141,4 +141,43 @@ describe('determineMultiplyRiskAction', () => {
       amount: 3_000,
     });
   });
+
+  it('forces emergency exit on critical borrow rate spike', () => {
+    const action = determineMultiplyRiskAction({
+      currentBalance: 5_000,
+      healthRate: 1.25,
+      alertHealthRate: 1.1,
+      emergencyHealthRate: 1.05,
+      riskAssessment: makeRiskAssessment({ compositeScore: 40 }),
+      rejectRiskScore: 75,
+      emergencyRiskScore: 90,
+      borrowRateSpike: { level: 'critical' },
+    });
+
+    expect(action).toEqual({
+      type: 'emergency',
+      reason: 'borrow_rate_spike_emergency',
+      amount: 5_000,
+    });
+  });
+
+  it('reduces 20% on warning borrow rate spike', () => {
+    const action = determineMultiplyRiskAction({
+      currentBalance: 10_000,
+      healthRate: 1.25,
+      alertHealthRate: 1.1,
+      emergencyHealthRate: 1.05,
+      riskAssessment: makeRiskAssessment({ compositeScore: 40, maxPositionCap: 20_000 }),
+      rejectRiskScore: 75,
+      emergencyRiskScore: 90,
+      borrowRateSpike: { level: 'warning' },
+    });
+
+    expect(action).toMatchObject({
+      type: 'reduce',
+      reason: 'borrow_rate_spike_soft',
+      amount: 2_000,
+      targetBalance: 8_000,
+    });
+  });
 });

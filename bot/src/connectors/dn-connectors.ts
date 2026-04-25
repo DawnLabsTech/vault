@@ -78,12 +78,7 @@ async function executeJupiterSwap(
     slippageBps,
   );
 
-  const txSig = await txSender.signAndSendBase64(swapTransaction);
-  const confirmed = await txSender.confirm(txSig);
-  if (!confirmed) {
-    throw new Error(`Swap transaction ${txSig} failed to confirm`);
-  }
-
+  const txSig = await txSender.signAndSendBase64Confirm(swapTransaction);
   return { outputAmount: quote.outputAmount, txSig };
 }
 

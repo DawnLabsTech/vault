@@ -139,6 +139,38 @@ export class FrMonitor {
     return rows.map(rowToData);
   }
 
+  /**
+   * Detect a sudden FR spike by comparing the latest annualized rate against
+   * the average over the last `windowHours` hours.
+   * Returns an alert if the change exceeds `thresholdBps`.
+   */
+  detectFrSpike(
+    thresholdBps: number,
+    windowHours: number = 24,
+  ): { level: 'warning' | 'critical'; message: string; changeBps: number } | null {
+    const cutoff = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+    const rows = this.db
+      .prepare('SELECT annualized_rate FROM fr_history WHERE timestamp >= ? ORDER BY timestamp ASC')
+      .all(cutoff) as { annualized_rate: number }[];
+
+    if (rows.length < 2) return null;
+
+    const oldest = rows[0]!.annualized_rate;
+    const latest = rows[rows.length - 1]!.annualized_rate;
+    const changeBps = (latest - oldest) * 100; // annualized % → bps
+
+    if (Math.abs(changeBps) <= thresholdBps) return null;
+
+    const direction = changeBps > 0 ? 'spiked' : 'crashed';
+    const level = Math.abs(changeBps) > thresholdBps * 2 ? 'critical' : 'warning';
+
+    return {
+      level,
+      message: `SOL funding rate ${direction}: ${changeBps > 0 ? '+' : ''}${changeBps.toFixed(0)} bps over ${windowHours}h (${oldest.toFixed(2)}% → ${latest.toFixed(2)}%)`,
+      changeBps,
+    };
+  }
+
   // ── Private helpers ──────────────────────────────────────
 
   /**

@@ -187,7 +187,7 @@ export class SolanaRpc {
    */
   async confirmTransaction(signature: string, timeout = 60_000): Promise<boolean> {
     const start = Date.now();
-    const pollInterval = 2_000;
+    const pollInterval = 4_000;
 
     log.debug({ signature, timeout }, 'Confirming transaction');
 

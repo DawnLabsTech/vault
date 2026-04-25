@@ -24,7 +24,11 @@ import type { KaminoLoopLending } from '../connectors/defi/kamino-loop.js';
 import type { KaminoMultiplyLending } from '../connectors/defi/kamino-multiply.js';
 import type { MarketScanner } from './market-scanner.js';
 import { ProtocolCircuitBreaker } from '../risk/protocol-circuit-breaker.js';
+import type { OracleMonitor, OracleAnomalyEvent } from '../risk/oracle-monitor.js';
+import { BorrowRateMonitor } from './borrow-rate-monitor.js';
+import { LiquidityStressMonitor } from './liquidity-stress-monitor.js';
 import type { Advisor } from '../advisor/advisor.js';
+import type { AnomalyMonitor } from '../risk/anomaly-monitor.js';
 
 const log = createChildLogger('orchestrator');
 
@@ -45,7 +49,11 @@ export interface OrchestratorDeps {
   kaminoMultiplyAdapters?: KaminoMultiplyLending[];
   marketScanner?: MarketScanner | null;
   circuitBreaker?: ProtocolCircuitBreaker | null;
+  oracleMonitor?: OracleMonitor | null;
+  borrowRateMonitor?: BorrowRateMonitor | null;
+  liquidityStressMonitor?: LiquidityStressMonitor | null;
   advisor?: Advisor | null;
+  anomalyMonitor?: AnomalyMonitor | null;
 }
 
 interface PersistedState {
@@ -76,13 +84,17 @@ export class Orchestrator {
   private lastAdvisorFrAnnualized: number = 0;
   private lastAdvisorRunAt: number = 0;
   private static readonly ADVISOR_COOLDOWN_MS = 1_800_000; // 30 min between event-triggered runs
-  private static readonly SNAPSHOT_CACHE_TTL_MS = 10_000;
+  private static readonly SNAPSHOT_CACHE_TTL_MS = 30_000;
 
   // WebSocket connection tracking
   private wsConnected = false;
 
   // Daily PnL timer
   private dailyPnlTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Suppress repeated utilization warnings for the same protocol
+  private lastKaminoLoopUtilizationWarnAt = 0;
+  private static readonly UTILIZATION_WARN_COOLDOWN_MS = 1_800_000; // 30 min
 
   constructor(deps: OrchestratorDeps) {
     this.deps = deps;
@@ -146,8 +158,8 @@ export class Orchestrator {
     // Daily PnL — scheduled via setTimeout at UTC 00:00
     this.scheduleDailyPnl();
 
-    // Health check + kill switch — every 5 seconds
-    this.scheduler.register('health-check', 5_000, async () => {
+    // Health check + kill switch — every 10 seconds (aligned with snapshotCache TTL)
+    this.scheduler.register('health-check', 10_000, async () => {
       await this.healthCheck();
     });
 
@@ -156,6 +168,14 @@ export class Orchestrator {
       const cbInterval = config.circuitBreaker?.checkIntervalMs ?? 60_000;
       this.scheduler.register('circuit-breaker', cbInterval, async () => {
         await this.runCircuitBreaker();
+      });
+    }
+
+    // Oracle anomaly monitor — every 5 minutes (aligned with multiply-health)
+    if (this.deps.oracleMonitor) {
+      const omInterval = config.oracleMonitor?.checkIntervalMs ?? 300_000;
+      this.scheduler.register('oracle-monitor', omInterval, async () => {
+        await this.runOracleMonitor();
       });
     }
 
@@ -184,6 +204,13 @@ export class Orchestrator {
       this.scheduler.register('kamino-multiply-rewards', 86_400_000, async () => {
         await this.claimKaminoMultiplyRewards();
       });
+
+      // Liquidity stress test — every 5 minutes (piggybacked on multiply health cycle)
+      if (this.deps.liquidityStressMonitor) {
+        this.scheduler.register('liquidity-stress-test', 300_000, async () => {
+          await this.runLiquidityStressTests();
+        });
+      }
     }
 
     // AI Advisor — periodic evaluation (default 6h)
@@ -191,6 +218,14 @@ export class Orchestrator {
       const advisorInterval = 21_600_000; // 6h
       this.scheduler.register('ai-advisor', advisorInterval, async () => {
         await this.runAdvisor();
+      });
+    }
+
+    // Anomaly polling fallback — every 1h. The webhook is the primary trigger;
+    // this guards against webhook downtime or misconfiguration.
+    if (this.deps.anomalyMonitor) {
+      this.scheduler.register('anomaly-poll', 3_600_000, async () => {
+        await this.deps.anomalyMonitor!.runChecks();
       });
     }
 
@@ -234,6 +269,12 @@ export class Orchestrator {
         this.deps.frMonitor.recordFundingRate(frData);
       });
       this.deps.binanceWs.connect();
+    }
+
+    // Prune old borrow rate records on startup
+    if (this.deps.borrowRateMonitor) {
+      const retentionDays = getConfig().borrowRateSpike?.sampleRetentionDays ?? 7;
+      this.deps.borrowRateMonitor.prune(retentionDays);
     }
 
     // Initial FR fetch
@@ -715,6 +756,25 @@ export class Orchestrator {
           'warning',
         );
       }
+
+      // Reserve utilization check — high USDC utilization means withdrawals may queue.
+      // Early indicator of bank-run / exploit-driven exit pressure, even before TVL drops register.
+      const utilization = await kaminoLoop.getSupplyUtilization();
+      if (utilization !== null && utilization >= loopConfig.warnUtilizationRatio) {
+        const now = Date.now();
+        if (now - this.lastKaminoLoopUtilizationWarnAt > Orchestrator.UTILIZATION_WARN_COOLDOWN_MS) {
+          log.warn(
+            { utilization, threshold: loopConfig.warnUtilizationRatio },
+            'Kamino Loop USDC utilization high',
+          );
+          await sendAlert(
+            `Kamino Loop USDC utilization ${(utilization * 100).toFixed(1)}% ` +
+              `(threshold ${(loopConfig.warnUtilizationRatio * 100).toFixed(0)}%) — withdrawals may be queued`,
+            'warning',
+          );
+          this.lastKaminoLoopUtilizationWarnAt = now;
+        }
+      }
     } catch (err) {
       log.error({ error: (err as Error).message }, 'Kamino Loop health check failed');
     }
@@ -772,6 +832,34 @@ export class Orchestrator {
           await this.checkAdvisorEventTriggers(this.snapshotCache.data, riskAssessment.compositeScore);
         }
 
+        // Record borrow rate and detect spikes
+        let borrowRateSpike: { level: 'warning' | 'critical' } | undefined;
+        const brMonitor = this.deps.borrowRateMonitor;
+        if (brMonitor) {
+          try {
+            const apyBreakdown = await adapter.getApyBreakdown();
+            brMonitor.recordRate({
+              label,
+              baseBorrowApy: apyBreakdown.baseBorrowApy,
+              baseSupplyApy: apyBreakdown.baseSupplyApy,
+              effectiveApy: apyBreakdown.effectiveApy,
+              nativeYield: apyBreakdown.nativeYield,
+              leverage: apyBreakdown.leverage,
+            });
+
+            const spikeConfig = config.borrowRateSpike;
+            if (spikeConfig) {
+              const spike = brMonitor.detectSpike(label, spikeConfig);
+              if (spike) {
+                borrowRateSpike = { level: spike.level };
+                await sendAlert(spike.message, spike.level);
+              }
+            }
+          } catch (err) {
+            log.warn({ error: (err as Error).message, label }, 'Failed to record/check borrow rate');
+          }
+        }
+
         const riskAction = determineMultiplyRiskAction({
           currentBalance,
           healthRate: health,
@@ -780,6 +868,7 @@ export class Orchestrator {
           riskAssessment,
           rejectRiskScore,
           emergencyRiskScore,
+          borrowRateSpike,
         });
 
         // Tier 1: Emergency — full exit when health or risk is critical
@@ -796,11 +885,13 @@ export class Orchestrator {
           );
 
           const message =
-            riskAction.reason === 'health_and_risk_emergency'
-              ? `Kamino Multiply [${label}] emergency: health ${health.toFixed(3)} < ${cfg.emergencyHealthRate}, risk ${(riskAssessment?.compositeScore ?? 0).toFixed(1)} >= ${emergencyRiskScore}\nTriggering full exit`
-              : riskAction.reason === 'risk_emergency'
-                ? `Kamino Multiply [${label}] risk EMERGENCY: score ${(riskAssessment?.compositeScore ?? 0).toFixed(1)} >= ${emergencyRiskScore}\nTriggering full exit`
-                : `Kamino Multiply [${label}] health CRITICAL: ${health.toFixed(3)} < ${cfg.emergencyHealthRate}\nTriggering emergency deleverage`;
+            riskAction.reason === 'borrow_rate_spike_emergency'
+              ? `Kamino Multiply [${label}] BORROW RATE SPIKE: negative spread detected\nTriggering full exit`
+              : riskAction.reason === 'health_and_risk_emergency'
+                ? `Kamino Multiply [${label}] emergency: health ${health.toFixed(3)} < ${cfg.emergencyHealthRate}, risk ${(riskAssessment?.compositeScore ?? 0).toFixed(1)} >= ${emergencyRiskScore}\nTriggering full exit`
+                : riskAction.reason === 'risk_emergency'
+                  ? `Kamino Multiply [${label}] risk EMERGENCY: score ${(riskAssessment?.compositeScore ?? 0).toFixed(1)} >= ${emergencyRiskScore}\nTriggering full exit`
+                  : `Kamino Multiply [${label}] health CRITICAL: ${health.toFixed(3)} < ${cfg.emergencyHealthRate}\nTriggering emergency deleverage`;
 
           await sendAlert(message, 'critical');
 
@@ -911,6 +1002,38 @@ export class Orchestrator {
         }
       } catch (err) {
         log.error({ error: (err as Error).message, adapter: adapter.name }, 'Kamino Multiply health check failed');
+      }
+    }
+  }
+
+  /**
+   * Run liquidity stress tests for all active Multiply positions.
+   * Fetches exit quotes at 25%, 50%, 100% of position size and alerts on high slippage.
+   */
+  private async runLiquidityStressTests(): Promise<void> {
+    const adapters = this.deps.kaminoMultiplyAdapters;
+    const monitor = this.deps.liquidityStressMonitor;
+    if (!adapters || adapters.length === 0 || !monitor) return;
+
+    for (const adapter of adapters) {
+      try {
+        const cfg = adapter.getMultiplyConfig();
+        const balance = await adapter.getBalance();
+
+        if (balance < 1) continue;
+
+        await monitor.runStressTest({
+          label: cfg.label,
+          collToken: cfg.collToken,
+          debtToken: cfg.debtToken,
+          collDecimals: cfg.collDecimals ?? 6,
+          positionUsd: balance,
+        });
+      } catch (err) {
+        log.warn(
+          { error: (err as Error).message, adapter: adapter.name },
+          'Liquidity stress test failed',
+        );
       }
     }
   }
@@ -1121,6 +1244,106 @@ export class Orchestrator {
     } catch (err) {
       log.error({ error: (err as Error).message }, 'Circuit breaker check failed');
     }
+  }
+
+  /**
+   * Run oracle anomaly checks. The monitor itself sends Telegram alerts;
+   * this method records events for measurement and dispatches actions for
+   * sustained critical events:
+   *   - `stable-depeg` (sustained): trip all protocols and emergency-deleverage
+   *     every Multiply position (NAV-wide impact).
+   *   - `cross-source-dev` (sustained): emergency-deleverage the affected
+   *     market only.
+   *   - other kinds and pre-sustained criticals: log/record only.
+   */
+  private async runOracleMonitor(): Promise<void> {
+    const om = this.deps.oracleMonitor;
+    if (!om) return;
+
+    let events: OracleAnomalyEvent[];
+    try {
+      events = await om.check();
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'Oracle monitor check failed');
+      return;
+    }
+
+    for (const event of events) {
+      recordEvent({
+        timestamp: new Date(event.timestamp).toISOString(),
+        eventType: EventType.ALERT,
+        amount: 0,
+        asset: event.mint ?? 'USDC',
+        sourceProtocol: event.market,
+        metadata: {
+          action: 'oracle_monitor',
+          kind: event.kind,
+          severity: event.severity,
+          sustained: event.sustained ?? false,
+          consecutiveCount: event.consecutiveCount ?? 0,
+          ...event.data,
+        },
+      });
+
+      if (event.severity !== 'critical' || event.sustained !== true) continue;
+
+      try {
+        await this.dispatchOracleCriticalAction(event);
+      } catch (err) {
+        log.error(
+          { kind: event.kind, market: event.market, error: (err as Error).message },
+          'Oracle action dispatch failed',
+        );
+        await sendAlert(
+          `Oracle action FAILED for ${event.market} (${event.kind}): ${(err as Error).message}`,
+          'critical',
+        );
+      }
+    }
+  }
+
+  private async dispatchOracleCriticalAction(event: OracleAnomalyEvent): Promise<void> {
+    const reason = `oracle:${event.kind} ${event.message}`;
+
+    if (event.kind === 'stable-depeg') {
+      // NAV-wide: trip the circuit breaker for all protocols (if wired) AND
+      // emergency-deleverage every Multiply position.
+      if (this.deps.circuitBreaker) {
+        await this.deps.circuitBreaker.trip('*', reason);
+      }
+      const adapters = this.deps.kaminoMultiplyAdapters ?? [];
+      for (const adapter of adapters) {
+        try {
+          await adapter.emergencyDeleverage();
+        } catch (err) {
+          log.error(
+            { adapter: adapter.name, error: (err as Error).message },
+            'emergency deleverage failed during stable-depeg',
+          );
+        }
+      }
+      return;
+    }
+
+    if (event.kind === 'cross-source-dev') {
+      const adapters = this.deps.kaminoMultiplyAdapters ?? [];
+      const target = adapters.find(
+        (a) => a.getMultiplyConfig().label === event.market,
+      );
+      if (!target) {
+        log.warn({ market: event.market }, 'No multiply adapter matches event market');
+        return;
+      }
+      await target.emergencyDeleverage();
+      return;
+    }
+
+    // pyth-stale / pyth-confidence / kamino-stale critical paths fall here —
+    // currently no automated action; alert only (already sent by emit()).
+    log.warn(
+      { kind: event.kind, market: event.market },
+      'Sustained oracle critical with no automated action wired',
+    );
   }
 
   private async sendStatusDigest(): Promise<void> {

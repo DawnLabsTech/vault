@@ -5,7 +5,9 @@
  * Monitors:
  *  - TVL drops (sudden outflows signal hacks or panics)
  *  - Withdrawal failures (protocol may be frozen)
- *  - Oracle/price deviations (manipulation or depegging)
+ *
+ * Oracle anomaly detection lives in `oracle-monitor.ts` and routes to
+ * `tripProtocol()` via the orchestrator when sustained.
  *
  * Integration: registered in orchestrator as a 60s scheduled task.
  * When tripped, emits a withdrawal action and disables the protocol.
@@ -18,7 +20,6 @@ const log = createChildLogger('circuit-breaker');
 
 const KAMINO_API = 'https://api.kamino.finance';
 const KAMINO_MAIN_MARKET = '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF';
-const JUPITER_PRICE_API = 'https://api.jup.ag/price/v2';
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 export const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
@@ -26,8 +27,6 @@ export const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
   tvlDropThresholdPct: 20,
   tvlDropWindowMs: 3_600_000,
   maxConsecutiveFailures: 3,
-  oracleDeviationBps: 50,
-  oracleDeviationCriticalBps: 100,
   cooldownMs: 86_400_000,
 };
 
@@ -107,10 +106,6 @@ export class ProtocolCircuitBreaker {
       state.lastCheckAt = now;
     }
 
-    // 3. USDC oracle deviation check (shared across all protocols)
-    const oracleEvent = await this.checkOracleDeviation(now);
-    if (oracleEvent) events.push(oracleEvent);
-
     return events;
   }
 
@@ -187,52 +182,24 @@ export class ProtocolCircuitBreaker {
     return null;
   }
 
-  private async checkOracleDeviation(now: number): Promise<CircuitBreakerEvent | null> {
-    try {
-      const res = await fetch(`${JUPITER_PRICE_API}?ids=${USDC_MINT}`);
-      if (!res.ok) return null;
-      const data = (await res.json()) as any;
-      const usdcPrice = parseFloat(data.data?.[USDC_MINT]?.price ?? '1');
-      const deviationBps = Math.abs(usdcPrice - 1.0) * 10_000;
-
-      if (deviationBps >= this.config.oracleDeviationCriticalBps) {
-        const reason = `USDC oracle deviation ${deviationBps.toFixed(0)}bps (price: $${usdcPrice.toFixed(4)})`;
-        log.error({ deviationBps, usdcPrice }, reason);
-
-        // Trip all active protocols
-        for (const name of this.protocols.keys()) {
-          if (!this.disabledProtocols.has(name)) {
-            await this.tripProtocol(name, reason);
-          }
+  /**
+   * Public trip — used by external monitors (oracle-monitor) to disable a
+   * protocol or all protocols when sustained anomalies fire. Routes through
+   * the same code path as TVL/withdrawal-failure trips so the action,
+   * cooldown, and onTrip callback are identical.
+   */
+  async trip(name: string, reason: string): Promise<void> {
+    if (name === '*') {
+      for (const protoName of this.protocols.keys()) {
+        if (!this.disabledProtocols.has(protoName)) {
+          await this.tripProtocol(protoName, reason);
         }
-
-        return {
-          protocol: '*',
-          reason,
-          severity: 'critical',
-          timestamp: now,
-          data: { deviationBps, usdcPrice },
-        };
       }
-
-      if (deviationBps >= this.config.oracleDeviationBps) {
-        const reason = `USDC oracle warning: ${deviationBps.toFixed(0)}bps deviation (price: $${usdcPrice.toFixed(4)})`;
-        log.warn({ deviationBps, usdcPrice }, reason);
-        await sendAlert(reason, 'warning');
-
-        return {
-          protocol: '*',
-          reason,
-          severity: 'warning',
-          timestamp: now,
-          data: { deviationBps, usdcPrice },
-        };
-      }
-    } catch (err) {
-      log.warn({ error: (err as Error).message }, 'Oracle deviation check failed');
+      return;
     }
-
-    return null;
+    if (this.protocols.has(name) && !this.disabledProtocols.has(name)) {
+      await this.tripProtocol(name, reason);
+    }
   }
 
   private async tripProtocol(name: string, reason: string): Promise<void> {

@@ -51,7 +51,7 @@ describe('ProtocolCircuitBreaker', () => {
     const cb = new ProtocolCircuitBreaker(protocols);
 
     const events = await cb.check();
-    // Only oracle check runs (TVL needs 2+ data points)
+    // TVL check needs 2+ data points; balance check passes for healthy protocols.
     expect(events.filter((e) => e.severity === 'critical')).toEqual([]);
   });
 
@@ -109,47 +109,13 @@ describe('ProtocolCircuitBreaker', () => {
     expect(cb.isDisabled('flaky')).toBe(false); // not yet 3 consecutive
   });
 
-  it('detects USDC oracle deviation warning', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: {
-          EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: { price: '0.9940' },
-        },
-      }),
-    });
-
-    const protocols = [makeMockProtocol('kamino')];
-    const cb = new ProtocolCircuitBreaker(protocols, {
-      oracleDeviationBps: 50,
-      oracleDeviationCriticalBps: 100,
-    });
-
-    const events = await cb.check();
-    const oracleEvent = events.find((e) => e.protocol === '*' && e.severity === 'warning');
-    expect(oracleEvent).toBeDefined();
-    expect(oracleEvent!.reason).toContain('oracle warning');
-  });
-
-  it('trips all protocols on critical USDC deviation', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: {
-          EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: { price: '0.9850' },
-        },
-      }),
-    });
-
+  it('trips all protocols when trip("*") is called externally', async () => {
     const onTrip = vi.fn();
     const protocols = [makeMockProtocol('kamino'), makeMockProtocol('jupiter')];
-    const cb = new ProtocolCircuitBreaker(protocols, {
-      oracleDeviationBps: 50,
-      oracleDeviationCriticalBps: 100,
-    });
+    const cb = new ProtocolCircuitBreaker(protocols);
     cb.onTrip = onTrip;
 
-    await cb.check();
+    await cb.trip('*', 'oracle:stable-depeg test');
     expect(cb.isDisabled('kamino')).toBe(true);
     expect(cb.isDisabled('jupiter')).toBe(true);
     expect(onTrip).toHaveBeenCalledTimes(2);

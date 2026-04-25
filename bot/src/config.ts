@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { watch } from 'chokidar';
-import type { PerpExchange, VaultConfig, MultiplyRebalanceConfig } from './types.js';
+import type { PerpExchange, VaultConfig, MultiplyRebalanceConfig, BorrowRateSpikeConfig } from './types.js';
 
 const CONFIG_DIR = join(process.cwd(), 'config');
 const CONFIG_PATH = join(CONFIG_DIR, 'default.json');
@@ -50,6 +50,12 @@ const DEFAULT_CONFIG: VaultConfig = {
   lending: {
     protocols: ['kamino', 'jupiter'],
     bufferPct: 5,
+  },
+  borrowRateSpike: {
+    absoluteThresholdAnnualized: 0.20,  // 20% annualized
+    rateChangeThresholdBps: 500,        // +5% per hour
+    negativeSpreadThreshold: 0,         // effective APY < 0
+    sampleRetentionDays: 7,
   },
   multiplyRebalance: {
     minDiffBps: 100,
@@ -126,6 +132,8 @@ class ConfigManager extends EventEmitter {
       thresholds: { ...defaults.thresholds, ...overrides.thresholds },
       risk: { ...defaults.risk, ...overrides.risk },
       lending: { ...defaults.lending, ...overrides.lending },
+      borrowRateSpike: { ...defaults.borrowRateSpike!, ...overrides.borrowRateSpike },
+      oracleMonitor: overrides.oracleMonitor ?? defaults.oracleMonitor,
       kaminoLoop: overrides.kaminoLoop ?? defaults.kaminoLoop,
       kaminoMultiply: overrides.kaminoMultiply ?? defaults.kaminoMultiply,
       kaminoMultiplyCandidates: overrides.kaminoMultiplyCandidates ?? defaults.kaminoMultiplyCandidates,

@@ -36,6 +36,7 @@ export interface KaminoLoopConfig {
   liquidationLtv: number;     // 0.85 (Kamino's USDC-USDT liquidation LTV)
   alertHealthRate: number;    // 1.10
   emergencyHealthRate: number; // 1.05
+  warnUtilizationRatio: number; // 0.95 — USDC supply side; above this, withdrawals may queue
 }
 
 const DEFAULT_LOOP_CONFIG: KaminoLoopConfig = {
@@ -43,6 +44,7 @@ const DEFAULT_LOOP_CONFIG: KaminoLoopConfig = {
   liquidationLtv: 0.85,
   alertHealthRate: 1.10,
   emergencyHealthRate: 1.05,
+  warnUtilizationRatio: 0.95,
 };
 
 /**
@@ -254,6 +256,24 @@ export class KaminoLoopLending implements LendingProtocol {
       }
       return Infinity; // no borrows = infinitely healthy
     }, 'kamino-loop-health');
+  }
+
+  /**
+   * USDC (collateral / supply-side) reserve utilization.
+   * High utilization = withdrawals may be queued, early indicator of bank-run / exploit exit pressure.
+   * Returns null if reserve data is unavailable.
+   */
+  async getSupplyUtilization(): Promise<number | null> {
+    return withRetry(async () => {
+      const { market } = await this.ensureInitialized();
+      await market.loadReserves();
+      const usdcReserve = market.getReserveByMint(address(MINTS.USDC));
+      if (!usdcReserve) return null;
+      return usdcReserve.calculateUtilizationRatio();
+    }, 'kamino-loop-utilization').catch((err) => {
+      log.warn({ error: (err as Error).message }, 'Failed to fetch supply utilization');
+      return null;
+    });
   }
 
   /**
